@@ -1,3 +1,2 @@
 tesseract-ocr
-ffmpeg 
-libc2pa-c
+ffmpeg
