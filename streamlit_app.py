@@ -15,6 +15,7 @@ import time
 import c2pa
 import base64
 from io import BytesIO
+from groq import Groq
 
 # --- Page Config ---
 st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
@@ -95,7 +96,6 @@ if 'form_key' not in st.session_state:
     st.session_state.form_key = 0
 
 # --- UNIFIED UI LAYOUT ---
-# The dynamic 'key' forces Streamlit to clear the widgets when form_key changes
 text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120, key=f"text_{st.session_state.form_key}")
 st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
 uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"], key=f"file_{st.session_state.form_key}")
@@ -105,7 +105,6 @@ with col_btn1:
     analyze_clicked = st.button("Analyze Now", type="primary", use_container_width=True)
 with col_btn2:
     if st.button("🔄 Start Over / Refresh", use_container_width=True):
-        # Increment the key to reset the widgets
         st.session_state.form_key += 1
         st.rerun()
 
@@ -130,16 +129,49 @@ if analyze_clicked:
             img = Image.open(uploaded_file)
             input_text = pytesseract.image_to_string(img).strip()
             if input_text: st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
+            
             try:
-                hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                img_res = hf_client.image_classification(img, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
-                top_label = img_res[0]['label'].lower()
-                if 'ai' in top_label or 'fake' in top_label:
+                # FREE GROQ LLAMA 3.2 VISION
+                groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+                buffered = BytesIO()
+                img.save(buffered, format="JPEG")
+                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                
+                vision_prompt = "Analyze this image. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
+                
+                response = groq_client.chat.completions.create(
+                    model="llama-3.2-11b-vision-preview",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": vision_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
+                    }],
+                    temperature=0.0
+                )
+                verdict = response.choices[0].message.content.strip().upper()
+                
+                if "AI-GENERATED" in verdict or "FAKE" in verdict:
                     ai_media_verdict = True
-                    st.error(f"🚨 **Image is AI-Generated/Deepfake** (Confidence: {img_res[0]['score']*100:.1f}%)")
+                    st.error("🚨 **Image is AI-Generated/Deepfake!**")
                 else:
                     ai_media_verdict = False
-            except Exception: media_api_failed = True
+                    st.success("✅ **Image appears to be real.**")
+                    
+            except Exception as e:
+                st.warning(f"Groq API unavailable, switching to Hugging Face backup... ({e})")
+                try:
+                    hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
+                    img_res = hf_client.image_classification(img, model="dima806/deepfake_vs_real_image_detection")
+                    if img_res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']:
+                        ai_media_verdict = True
+                        st.error("🚨 **Image is AI-Generated (Hugging Face Backup)**")
+                    else:
+                        ai_media_verdict = False
+                        st.success("✅ **Image appears real (Hugging Face Backup).**")
+                except Exception:
+                    media_api_failed = True
                 
         elif filename.endswith(('.mp4', '.mov')):
             is_video = True
@@ -150,62 +182,59 @@ if analyze_clicked:
                 else:
                     st.info(f"🎞️ **Video processed. Extracting {len(frames)} frames.**")
                     
-                    # --- DUAL-LAYER VIDEO DETECTION ---
-                    hf_success = False
-                    ai_votes = 0
-                    
-                    # Layer 1: Try Hugging Face API
                     try:
-                        hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                        for frame in frames:
-                            res = hf_client.image_classification(frame, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
-                            top_label = res[0]['label'].lower()
-                            if 'ai' in top_label or 'fake' in top_label: 
-                                ai_votes += 1
-                        hf_success = True
-                    except Exception:
-                        hf_success = False
-
-                    # Layer 2: If HF fails, use OpenRouter Vision AI
-                    if not hf_success:
-                        st.warning("Hugging Face API timed out. Switching to Vision AI Fallback...")
-                        try:
-                            buffered = BytesIO()
-                            frames[0].save(buffered, format="JPEG")
-                            base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                            
-                            vision_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.secrets["OPENROUTER_API_KEY"])
-                            vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
-                            
-                            vision_response = vision_client.chat.completions.create(
-                                model="nvidia/nemotron-nano-12b-v2-vl:free",  # Updated current free vision model
-                                messages=[{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "text", "text": vision_prompt},
-                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                                    ]
-                                }]
-                            )
-                            vision_verdict = vision_response.choices[0].message.content.strip().upper()
-                            
-                            if "AI-GENERATED" in vision_verdict or "FAKE" in vision_verdict:
-                                ai_media_verdict = True
-                                st.error("🚨 **Vision AI detected this video as AI-Generated!**")
-                            else:
-                                ai_media_verdict = False
-                                st.success("✅ **Vision AI analyzed the frame and determined it is Real.**")
-                                
-                        except Exception as e:
-                            media_api_failed = True
-                            st.warning(f"⚠️ Both Hugging Face and Vision AI failed. Error: {e}")
-                    else:
-                        if ai_votes >= 2:
+                        # FREE GROQ LLAMA 3.2 VISION FOR VIDEO
+                        groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+                        buffered = BytesIO()
+                        frames[0].save(buffered, format="JPEG")
+                        base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                        
+                        vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
+                        
+                        response = groq_client.chat.completions.create(
+                            model="llama-3.2-11b-vision-preview",
+                            messages=[{
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": vision_prompt},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                                ]
+                            }],
+                            temperature=0.0
+                        )
+                        verdict = response.choices[0].message.content.strip().upper()
+                        
+                        if "AI-GENERATED" in verdict or "FAKE" in verdict:
                             ai_media_verdict = True
-                            st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
+                            st.error("🚨 **Video is likely AI-Generated (Deepfake)!**")
                         else:
                             ai_media_verdict = False
-                            st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
+                            st.success("✅ **Video appears to be real.**")
+                            
+                    except Exception as e:
+                        st.warning(f"Groq Vision unavailable, trying Hugging Face backup... ({e})")
+                        hf_success = False
+                        ai_votes = 0
+                        try:
+                            hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
+                            for frame in frames:
+                                res = hf_client.image_classification(frame, model="dima806/deepfake_vs_real_image_detection")
+                                if res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']: 
+                                    ai_votes += 1
+                            hf_success = True
+                        except Exception:
+                            hf_success = False
+
+                        if hf_success:
+                            if ai_votes >= 2:
+                                ai_media_verdict = True
+                                st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
+                            else:
+                                ai_media_verdict = False
+                                st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
+                        else:
+                            media_api_failed = True
+                            st.warning("⚠️ **All free Vision APIs are currently offline.** Please try again later.")
                         
     elif text_input.strip():
         input_text = text_input.strip()
@@ -338,7 +367,7 @@ if analyze_clicked:
                 col1.metric("AI Text Detection", "AI-Generated" if is_ai_text else "Human-Written")
                 col2.metric("Baseline Model", f"FAKE {base_conf:.1f}%" if base_pred == 1 else f"REAL {base_conf:.1f}%")
 
-# --- PERMANENT REPORTING SECTION (Outside the if analyze_clicked block so it always shows) ---
+# --- PERMANENT REPORTING SECTION ---
 st.write("---")
 st.subheader("📢 Report Misinformation to Authorities")
 st.markdown("""
