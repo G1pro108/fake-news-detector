@@ -26,13 +26,14 @@ def load_baseline():
     return tfidf, model
 @st.cache_resource
 def load_bert():
-    # ⚠️ PASTE YOUR GOOGLE DRIVE FILE ID HERE ⚠️
-    file_id = "1CKCQZBh-EtmuHK7uLNPXKcjSi3iDA3AQ" 
+    # Updated with your NEW Google Drive File ID
+    file_id = "1cWQlcmudcCov59qN6u8CiIEOGjMYI45Y" 
     download_path = "bert_model.zip"
     
     # Check if we already downloaded and extracted it
     if not os.path.exists("./final"):
-        url = f'https://drive.google.com/uc?id={file_id}'
+        # ⚠️ Notice the new URL format below with export=download&confirm=t
+        url = f'https://drive.google.com/uc?export=download&confirm=t&id={file_id}'
         gdown.download(url, download_path, quiet=False)
         
         # Unzip the model
