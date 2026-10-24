@@ -18,4 +18,4 @@ shap>=0.46
 lime>=0.2
 streamlit>=1.36
 gdown
-google-generativeai
+google-genai
