@@ -68,34 +68,34 @@ if st.button("Analyze Article", type="primary"):
             base_proba = base_model.predict_proba(text_vec)[0]
             base_conf = base_proba[base_pred] * 100
 
-            # 2. Modern Deep Learning (DeBERTa)
+            # 2. Modern Deep Learning (Lightweight, Fast Model)
             bert_is_fake = None
             bert_conf = 0
+            bert_status = "success"
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                result = hf_client.zero_shot_classification(
+                # Using a fast RoBERTa model specifically trained for fake news
+                result = hf_client.text_classification(
                     clean_text[:1000],
-                    candidate_labels=["fake news", "real news"],
-                    model="cross-encoder/nli-distilroberta-base"
+                    model="hamzab/roberta-fake-news-classification"
                 )
                 top_prediction = result[0]
-                bert_is_fake = True if top_prediction['label'] == "fake news" else False
+                # Model returns 'FAKE' or 'TRUE'
+                bert_is_fake = True if top_prediction['label'].upper() in ['FAKE', 'LABEL_0'] else False
                 bert_conf = top_prediction['score'] * 100
             except Exception:
-                pass # Skip if API fails
+                bert_status = "offline" # Handle gracefully without a scary yellow bar
 
             # --- 3. REVERSE ENGINEERING (GLOBAL DATABASE) ---
             re_origin = "Unknown"
             re_trust = "Medium (Unverified)"
             is_satire = False
             
-            # Check if user pasted a URL
             url_match = re.search(r'https?://[^\s]+', text_input)
             if url_match:
                 domain = url_match.group(0).split('/')[2].replace('www.', '')
                 re_origin = f"URL Provided: {domain}"
             else:
-                # Search the web for the exact text
                 try:
                     search_query = clean_text[:80].replace('"', '')
                     exact_search = DDGS().text(f'"{search_query}"', max_results=1)
@@ -104,10 +104,10 @@ if st.button("Analyze Article", type="primary"):
                         re_origin = domain
                     else:
                         re_origin = "No exact match found online"
+                        domain = ""
                 except:
                     domain = ""
 
-            # Evaluate the domain against global lists
             if domain:
                 if any(satire in domain for satire in SATIRE_SOURCES):
                     re_trust = "Low (Known Satire/Fake Site)"
@@ -131,11 +131,9 @@ if st.button("Analyze Article", type="primary"):
                     api_key=st.secrets["OPENROUTER_API_KEY"],
                 )
                 
-                # Passing the Global RAE logic to the LLM
                 prompt = f"""
                 Analyze the following news article.
                 Web Context: {context_text}
-                
                 REVERSE ENGINEERING DATA:
                 - Traced Origin: '{re_origin}'
                 - Trust Level: '{re_trust}'
@@ -169,15 +167,14 @@ if st.button("Analyze Article", type="primary"):
                 llm_action = parsed_json.get("action", "No action provided.")
                 
             except Exception as e:
-                st.error(f"LLM API Error: {e}")
+                pass # Suppress LLM errors if it fails
 
-            # --- ENSEMBLE VOTING (Global Rule-Based) ---
+            # --- ENSEMBLE VOTING ---
             final_is_fake = False
-            
             if is_satire:
-                final_is_fake = True # Hard rule: Satire is always fake
+                final_is_fake = True 
             elif "High" in re_trust:
-                final_is_fake = False # Hard rule: Trusted source is real
+                final_is_fake = False 
             else:
                 final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
 
@@ -189,7 +186,6 @@ if st.button("Analyze Article", type="primary"):
                 st.error("🚨 **OVERALL VERDICT: FAKE NEWS**")
                 st.info(f"**🧠 Reason:** {llm_reason}")
                 st.warning(f"**🛡️ Recommended Action:** {llm_action}")
-                
                 st.markdown("""
                 ### 📢 Report This Fake News to Authorities:
                 *   🚔 **[National Cyber Crime Reporting Portal](https://cybercrime.gov.in/)**
@@ -223,13 +219,16 @@ if st.button("Analyze Article", type="primary"):
                 else: st.success(f"✅ REAL ({base_conf:.1f}%)")
 
             with col2:
-                st.markdown("**Deep Learning (DeBERTa)**")
-                if bert_is_fake is True: st.error(f"🚨 FAKE ({bert_conf:.1f}%)")
-                elif bert_is_fake is False: st.success(f"✅ REAL ({bert_conf:.1f}%)")
-                else: st.warning("API Timeout")
+                st.markdown("**Deep Learning (RoBERTa)**")
+                if bert_status == "offline":
+                    st.markdown("⚪ *Model Offline (API Timeout)*") # Clean gray text instead of yellow bar
+                elif bert_is_fake is True:
+                    st.error(f"🚨 FAKE ({bert_conf:.1f}%)")
+                elif bert_is_fake is False:
+                    st.success(f"✅ REAL ({bert_conf:.1f}%)")
 
             with col3:
                 st.markdown("**OpenRouter (LLM)**")
                 if llm_is_fake is True: st.error("🚨 FAKE")
                 elif llm_is_fake is False: st.success("✅ REAL")
-                else: st.error("API Error")
+                else: st.markdown("⚪ *Model Offline*")
