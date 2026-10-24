@@ -8,14 +8,16 @@ from huggingface_hub import InferenceClient
 from duckduckgo_search import DDGS
 from PIL import Image
 import pytesseract
+import cv2
+import numpy as np
+import tempfile
 
 # --- Page Config ---
-st.set_page_config(page_title="Multimodal Fake News Detector", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
 
-st.title("🛡️ Multimodal Fake News & AI Detector")
+st.title("🛡️ Multimodal Fake News & Deepfake Detector")
 st.markdown("""
-This system detects **Fake News, AI-Generated Text, and AI-Generated Images**. 
-It supports pasting text, links, or uploading cropped screenshots.
+Protect yourself from misinformation. You can **paste text, paste a URL, or upload images, text files, and video clips (MP4)**.
 """)
 
 # --- GLOBAL TRUSTED SOURCES DATABASE ---
@@ -41,138 +43,199 @@ except Exception as e:
     st.error(f"Error loading local models. Details: {e}")
     models_loaded = False
 
-# --- UI Layout: TABS FOR TEXT VS IMAGE ---
-tab1, tab2 = st.tabs(["📝 Paste Text / URL", "🖼️ Upload Cropped Image"])
+# Helper function to extract frames from video
+def extract_video_frames(video_file):
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    tfile.write(video_file.read())
+    vidcap = cv2.VideoCapture(tfile.name)
+    total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    frames = []
+    if total_frames > 0:
+        # Extract 3 frames evenly spaced across the video
+        frame_indices = [int(total_frames * 0.2), int(total_frames * 0.5), int(total_frames * 0.8)]
+        for idx in frame_indices:
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            success, image = vidcap.read()
+            if success:
+                # Convert BGR to RGB
+                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(image_rgb))
+    vidcap.release()
+    os.remove(tfile.name)
+    return frames
 
-text_input = ""
-image_input = None
+# --- UNIFIED UI LAYOUT ---
+st.subheader("1. Enter the Content")
 
-with tab1:
-    text_input = st.text_area("Paste the news article here (or URL):", height=200, placeholder="Enter title, body text, or URL...")
+text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120, placeholder="Paste the news article, a tweet, or a URL (Ctrl+V)...")
 
-with tab2:
-    image_input = st.file_uploader("Upload a screenshot of a news article or tweet (JPG/PNG):", type=["jpg", "jpeg", "png"])
+st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
 
-if st.button("Analyze Now", type="primary"):
-    if not text_input.strip() and not image_input:
-        st.warning("Please paste text or upload an image.")
-    elif models_loaded:
-        with st.spinner("Running Multimodal AI Analysis..."):
+uploaded_file = st.file_uploader("📁 Upload an Image (JPG, PNG), Text file (.txt), or Video (.mp4, .mov):", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"])
+
+if st.button("Analyze Now", type="primary", use_container_width=True):
+    
+    input_text = ""
+    is_image = False
+    is_video = False
+    ai_media_verdict = None
+    
+    if uploaded_file is not None:
+        filename = uploaded_file.name.lower()
+        
+        # 1. TEXT FILE
+        if filename.endswith('.txt'):
+            input_text = uploaded_file.read().decode("utf-8")
+            st.info("📄 **Text file loaded successfully.**")
             
-            # --- 0. EXTRACT TEXT FROM IMAGE (OCR) ---
-            extracted_text = ""
-            ai_image_verdict = None
+        # 2. IMAGE FILE
+        elif filename.endswith(('.jpg', '.jpeg', '.png')):
+            is_image = True
+            img = Image.open(uploaded_file)
+            input_text = pytesseract.image_to_string(img).strip()
+            if input_text:
+                st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
             
-            if image_input:
-                img = Image.open(image_input)
-                # Extract text using Tesseract OCR
-                extracted_text = pytesseract.image_to_string(img).strip()
-                if extracted_text:
-                    st.info(f"**Extracted Text from Image:**\n\n{extracted_text}")
-                    text_input = extracted_text # Overwrite text_input for the rest of the pipeline
-                else:
-                    st.warning("No text found in image. Checking if the image itself is AI-generated...")
-
-                # --- AI IMAGE DETECTION ---
-                try:
-                    hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                    # Using a specialized model to detect AI-generated images
-                    img_res = hf_client.image_classification(image_input, model="umm-maybe/AI-image-detector")
-                    top_img = img_res[0]
-                    if top_img['label'].lower() in ['artificial', 'fake', 'ai']:
-                        ai_image_verdict = True
-                        st.error(f"🚨 **This image is likely AI-Generated** (Confidence: {top_img['score']*100:.1f}%)")
-                    else:
-                        ai_image_verdict = False
-                        st.success(f"✅ **This image looks Real/Photographic** (Confidence: {top_img['score']*100:.1f}%)")
-                except Exception as e:
-                    pass # Ignore if API fails
-
-            if not text_input.strip() and ai_image_verdict is None:
-                st.stop() # Nothing to analyze
-
-            # --- 1. AI TEXT DETECTION ---
-            is_ai_text = False
+            # AI Image detection
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                ai_text_res = hf_client.text_classification(text_input[:1000], model="openai-community/roberta-base-openai-detector")
-                if ai_text_res[0]['label'].lower() in ['fake', 'chatgpt', 'ai'] and ai_text_res[0]['score'] > 0.6:
-                    is_ai_text = True
-            except:
+                img_res = hf_client.image_classification(img, model="umm-maybe/AI-image-detector")
+                if img_res[0]['label'].lower() in ['artificial', 'fake', 'ai']:
+                    ai_media_verdict = True
+                    st.error(f"🚨 **Image is AI-Generated** (Confidence: {img_res[0]['score']*100:.1f}%)")
+                else:
+                    ai_media_verdict = False
+            except Exception:
                 pass
-
-            # --- 2. BASELINE PREDICTION ---
-            clean_text = re.sub(r'http\S+', '', text_input).replace('Read more at:', '').strip()
-            text_vec = tfidf.transform([clean_text])
-            base_pred = base_model.predict(text_vec)[0]
-            base_conf = base_model.predict_proba(text_vec)[0][base_pred] * 100
-
-            # --- 3. REVERSE ENGINEERING (RAE) ---
-            re_origin = "Unknown"
-            re_trust = "Medium (Unverified)"
-            domain = ""
+                
+        # 3. VIDEO FILE (DEEPFAKE DETECTION)
+        elif filename.endswith(('.mp4', '.mov')):
+            is_video = True
+            with st.spinner("Extracting frames from video for deepfake analysis..."):
+                frames = extract_video_frames(uploaded_file)
+                
+                if not frames:
+                    st.error("Could not extract frames from this video.")
+                else:
+                    st.info(f"🎞️ **Video processed. Extracted {len(frames)} frames for AI analysis.**")
+                    ai_votes = 0
+                    try:
+                        hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
+                        for frame in frames:
+                            res = hf_client.image_classification(frame, model="umm-maybe/AI-image-detector")
+                            if res[0]['label'].lower() in ['artificial', 'fake', 'ai']:
+                                ai_votes += 1
+                        
+                        # If at least 2 out of 3 frames are flagged, the video is a deepfake
+                        if ai_votes >= 2:
+                            ai_media_verdict = True
+                            st.error(f"🚨 **This video is likely AI-Generated (Deepfake)!** ({ai_votes}/{len(frames)} frames flagged).")
+                        else:
+                            ai_media_verdict = False
+                            st.success("✅ **This video appears to be real.**")
+                    except Exception as e:
+                        st.warning("Video AI detection API timed out. Relying on text analysis (if any).")
+                        
+    elif text_input.strip():
+        input_text = text_input.strip()
+        
+    if not input_text and not is_image and not is_video:
+        st.warning("⚠️ Please paste some text or upload a file to analyze.")
+    else:
+        with st.spinner("Running Multimodal AI Analysis..."):
             
-            url_match = re.search(r'https?://[^\s]+', text_input)
-            if url_match:
-                domain = url_match.group(0).split('/')[2].replace('www.', '')
-                re_origin = f"URL Provided: {domain}"
-            else:
+            # If text was extracted or pasted, run text analysis
+            is_ai_text = False
+            base_pred = 0
+            base_conf = 0
+            re_origin = "N/A"
+            re_trust = "N/A"
+            llm_is_fake = None
+            llm_reason = "No text to analyze (Media-only analysis)."
+
+            clean_text = re.sub(r'http\S+', '', input_text).replace('Read more at:', '').strip()
+            
+            if clean_text:
+                # 1. AI TEXT DETECTION
                 try:
-                    exact_search = DDGS().text(f'"{clean_text[:80]}"', max_results=1)
-                    if exact_search:
-                        domain = exact_search[0]['href'].split('/')[2].replace('www.', '')
-                        re_origin = domain
+                    hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
+                    ai_text_res = hf_client.text_classification(clean_text[:1000], model="openai-community/roberta-base-openai-detector")
+                    if ai_text_res[0]['label'].lower() in ['fake', 'chatgpt', 'ai'] and ai_text_res[0]['score'] > 0.6:
+                        is_ai_text = True
                 except: pass
 
-            if domain:
-                if any(satire in domain for satire in SATIRE_SOURCES): re_trust = "Low (Known Satire/Fake Site)"
-                elif any(trusted in domain for trusted in TRUSTED_SOURCES): re_trust = "High (Verified Global News Source)"
+                # 2. BASELINE PREDICTION
+                text_vec = tfidf.transform([clean_text])
+                base_pred = base_model.predict(text_vec)[0]
+                base_conf = base_model.predict_proba(text_vec)[0][base_pred] * 100
 
-            # --- 4. LLM + RAG PREDICTION ---
-            llm_is_fake = None
-            llm_reason = "No explanation provided."
-            try:
-                search_results = DDGS().text(clean_text[:150], max_results=2)
-                context_text = "\n".join([f"- {r['title']}: {r['body']}" for r in search_results])
-                
-                client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.secrets["OPENROUTER_API_KEY"])
-                prompt = f"""
-                Analyze this news. Web Context: {context_text}
-                Traced Origin: '{re_origin}' | Trust: '{re_trust}'
-                AI Generated Text Flag: {is_ai_text}
-                
-                Return JSON: "verdict": "REAL" or "FAKE", "reason": "1-2 sentences.", "action": "report or no action"
-                Article: {clean_text[:3000]}
-                """
-                response = client.chat.completions.create(model="nvidia/nemotron-3.5-lightning:free", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
-                parsed_json = json.loads(response.choices[0].message.content.strip().replace("```json", "").replace("```", ""))
-                llm_is_fake = True if "FAKE" in parsed_json.get("verdict", "").upper() else False
-                llm_reason = parsed_json.get("reason", "")
-            except: pass
+                # 3. REVERSE ENGINEERING
+                domain = ""
+                url_match = re.search(r'https?://[^\s]+', input_text)
+                if url_match:
+                    domain = url_match.group(0).split('/')[2].replace('www.', '')
+                    re_origin = f"URL Provided: {domain}"
+                else:
+                    try:
+                        exact_search = DDGS().text(f'"{clean_text[:80]}"', max_results=1)
+                        if exact_search:
+                            domain = exact_search[0]['href'].split('/')[2].replace('www.', '')
+                            re_origin = domain
+                    except: pass
+
+                if domain:
+                    if any(satire in domain for satire in SATIRE_SOURCES): re_trust = "Low (Satire)"
+                    elif any(trusted in domain for trusted in TRUSTED_SOURCES): re_trust = "High (Verified)"
+
+                # 4. LLM PREDICTION
+                try:
+                    search_results = DDGS().text(clean_text[:150], max_results=2)
+                    context_text = "\n".join([f"- {r['title']}: {r['body']}" for r in search_results])
+                    
+                    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.secrets["OPENROUTER_API_KEY"])
+                    prompt = f"""
+                    Analyze this news. Web Context: {context_text}
+                    Traced Origin: '{re_origin}' | Trust: '{re_trust}'
+                    AI Generated Text Flag: {is_ai_text}
+                    Return JSON: "verdict": "REAL" or "FAKE", "reason": "1-2 sentences."
+                    Article: {clean_text[:3000]}
+                    """
+                    response = client.chat.completions.create(model="nvidia/nemotron-3.5-lightning:free", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
+                    parsed_json = json.loads(response.choices[0].message.content.strip().replace("```json", "").replace("```", ""))
+                    llm_is_fake = True if "FAKE" in parsed_json.get("verdict", "").upper() else False
+                    llm_reason = parsed_json.get("reason", "")
+                except: pass
 
             # --- FINAL VERDICT LOGIC ---
-            final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
-            if is_ai_text: final_is_fake = True # AI text is flagged fake
-            if ai_image_verdict is True: final_is_fake = True # AI image overrides
-            if "High" in re_trust: final_is_fake = False # Trusted source overrides
-            if "Satire" in re_trust: final_is_fake = True
+            final_is_fake = False
+            if clean_text:
+                final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
+                if is_ai_text: final_is_fake = True 
+                if "High" in re_trust: final_is_fake = False 
+            
+            # Media overrides text
+            if ai_media_verdict is True: 
+                final_is_fake = True 
 
             st.divider()
             st.subheader("🏆 Final Verdict")
+            
             if final_is_fake:
-                st.error("🚨 **OVERALL VERDICT: FAKE / AI-GENERATED**")
-                st.write(f"**Reason:** {llm_reason}")
-                if is_ai_text: st.warning("⚠️ **Warning:** The text was flagged as likely written by AI (ChatGPT/Bot).")
-                if ai_image_verdict: st.warning("⚠️ **Warning:** The uploaded image was flagged as AI-generated.")
+                st.error("🚨 **OVERALL VERDICT: FAKE / MISLEADING / AI-GENERATED**")
+                if llm_reason: st.write(f"**Reason:** {llm_reason}")
+                if is_ai_text: st.warning("⚠️ **Warning:** The text was flagged as AI-generated.")
+                if ai_media_verdict: st.warning("⚠️ **Warning:** The uploaded media was flagged as AI-generated (Deepfake).")
                 st.markdown("### 📢 Report to Authorities:\n* 🚔 [Cyber Crime Portal](https://cybercrime.gov.in/) | 📰 [PIB Fact Check](https://pib.gov.in/)")
             else:
-                st.success("✅ **OVERALL VERDICT: REAL NEWS**")
-                st.write(f"**Reason:** {llm_reason}")
+                st.success("✅ **OVERALL VERDICT: REAL / AUTHENTIC**")
+                if llm_reason: st.write(f"**Reason:** {llm_reason}")
 
-            st.write("---")
-            st.subheader("🕵️ Source Tracing & Analysis")
-            st.markdown(f"**Traced Origin:** `{re_origin}` | **Trust Level:** {re_trust}")
-            
-            col1, col2 = st.columns(2)
-            col1.metric("AI Text Detection", "AI-Generated" if is_ai_text else "Human-Written")
-            col2.metric("Baseline Model", f"FAKE {base_conf:.1f}%" if base_pred == 1 else f"REAL {base_conf:.1f}%")
+            if clean_text:
+                st.write("---")
+                st.subheader("🕵️ Source Tracing & Analysis")
+                st.markdown(f"**Traced Origin:** `{re_origin}` | **Trust Level:** {re_trust}")
+                
+                col1, col2 = st.columns(2)
+                col1.metric("AI Text Detection", "AI-Generated" if is_ai_text else "Human-Written")
+                col2.metric("Baseline Model", f"FAKE {base_conf:.1f}%" if base_pred == 1 else f"REAL {base_conf:.1f}%")
