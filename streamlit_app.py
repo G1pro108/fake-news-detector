@@ -4,18 +4,17 @@ import torch
 import gdown
 import zipfile
 import os
+import json
 from openai import OpenAI
 from transformers import pipeline
 
 # --- Page Config ---
 st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wide")
 
-st.title("📰 Fake News Detector")
+st.title("📰 Fake News Detector & Cyber Threat Analyzer")
 st.markdown("""
-This application uses **three** models to detect if a news article is **Real** or **Fake**.
-*   **Baseline:** TF-IDF + Logistic Regression
-*   **BERT:** Fine-tuned DistilBERT (Note: Trained on 2016 US politics, may struggle with modern/international news)
-*   **OpenRouter (LLM):** Modern LLM with real-world knowledge
+This application uses **three** AI models to detect if a news article is **Real** or **Fake**. 
+If the news is deemed fake, it provides the **reasoning** and **actionable steps** to report it to the Indian Cyber Crime authorities.
 """)
 
 # --- Load Models ---
@@ -54,7 +53,7 @@ if st.button("Analyze Article", type="primary"):
     if not text_input.strip():
         st.warning("Please enter some text to analyze.")
     elif models_loaded:
-        with st.spinner("Analyzing with all 3 models..."):
+        with st.spinner("Analyzing with all 3 models and generating report..."):
             
             # 1. Baseline Prediction
             text_vec = tfidf.transform([text_input])
@@ -67,27 +66,55 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
-            # 3. OpenRouter Prediction
+            # 3. OpenRouter Prediction (JSON Mode for Reasoning & Action)
+            llm_is_fake = None
+            llm_reason = "No explanation provided."
+            llm_action = "No action needed."
+            llm_error = None
+            
             try:
                 client = OpenAI(
                     base_url="https://openrouter.ai/api/v1",
                     api_key=st.secrets["OPENROUTER_API_KEY"],
                 )
-                prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
+                
+                # We prompt the LLM to return structured JSON
+                prompt = f"""
+                Analyze the following news article. 
+                Return ONLY a valid JSON object with exactly these three keys:
+                "verdict": "REAL" or "FAKE",
+                "reason": "A short 1-2 sentence explanation of why this is real or fake based on tone, logic, and facts.",
+                "action": "If FAKE, mention that the user should report this to the Indian Cyber Crime portal (cybercrime.gov.in) or PIB Fact Check. If REAL, say 'No action needed'."
+                
+                Article: {text_input[:4000]}
+                """
                 
                 response = client.chat.completions.create(
                     model="nvidia/nemotron-3.5-lightning:free", 
                     messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"} # Force JSON output if supported
                 )
-                llm_pred = response.choices[0].message.content.strip().upper()
-                llm_is_fake = True if "FAKE" in llm_pred else False
-                llm_error = None
+                
+                # Parse the JSON response
+                raw_response = response.choices[0].message.content.strip()
+                # Clean up markdown formatting if the LLM adds it
+                if raw_response.startswith("```json"):
+                    raw_response = raw_response.replace("```json", "").replace("```", "").strip()
+                
+                parsed_json = json.loads(raw_response)
+                
+                verdict_str = parsed_json.get("verdict", "").upper()
+                llm_is_fake = True if "FAKE" in verdict_str else False
+                llm_reason = parsed_json.get("reason", "No reason provided.")
+                llm_action = parsed_json.get("action", "No action provided.")
+                
             except Exception as e:
-                llm_is_fake = None
                 llm_error = str(e)
+                # Fallback simple check if JSON parsing fails
+                if 'raw_response' in locals() and "FAKE" in raw_response.upper():
+                     llm_is_fake = True
 
-            # --- ENSEMBLE VOTING (NEW) ---
-            # We have 3 models. If at least 2 say FAKE, final is FAKE.
+            # --- ENSEMBLE VOTING ---
             votes_for_fake = 0
             if base_pred == 1: votes_for_fake += 1
             if bert_pred == 1: votes_for_fake += 1
@@ -95,39 +122,55 @@ if st.button("Analyze Article", type="primary"):
 
             st.divider()
             
-            # Display the Overall Verdict
-            st.subheader("🏆 Final Ensemble Verdict")
+            # --- FINAL VERDICT & ACTIONS ---
+            st.subheader("🏆 Final Verdict")
             if votes_for_fake >= 2:
                 st.error("🚨 **OVERALL VERDICT: FAKE NEWS** (Majority Vote)")
+                
+                # Display Reason from LLM
+                st.info(f"**🧠 Reason:** {llm_reason}")
+                
+                # Display Action & Security Calls
+                st.warning(f"**🛡️ Recommended Action:** {llm_action}")
+                
+                # Indian Government Reporting Links
+                st.markdown("""
+                ### 📢 Report This Fake News to Authorities:
+                Please take a screenshot of this article and report it immediately to the official Indian Government portals:
+                *   🚔 **[National Cyber Crime Reporting Portal](https://cybercrime.gov.in/)** (Select 'Report Cyber Crime' -> 'Fake News')
+                *   📰 **[PIB Fact Check](https://pib.gov.in/factcheck.aspx)** (WhatsApp: +91-8799717971)
+                *   🐦 **Twitter/X:** Tag `@Cyberdost` (Ministry of Home Affairs)
+                """)
+                
             else:
                 st.success("✅ **OVERALL VERDICT: REAL NEWS** (Majority Vote)")
-            
+                st.info(f"**🧠 Reason:** {llm_reason}")
+
             st.write("---")
             
-            # Display Individual Model Results
+            # --- INDIVIDUAL MODEL BREAKDOWN ---
+            st.subheader("🔍 Model Breakdown")
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.subheader("Baseline (TF-IDF)")
+                st.markdown("**Baseline (TF-IDF)**")
                 if base_pred == 1:
-                    st.error(f"🚨 **FAKE NEWS**\nConfidence: {base_conf:.2f}%")
+                    st.error(f"🚨 FAKE\nConfidence: {base_conf:.2f}%")
                 else:
-                    st.success(f"✅ **REAL NEWS**\nConfidence: {base_conf:.2f}%")
+                    st.success(f"✅ REAL\nConfidence: {base_conf:.2f}%")
 
             with col2:
-                st.subheader("Deep Learning (BERT)")
+                st.markdown("**Deep Learning (BERT)**")
                 if bert_pred == 1:
-                    st.error(f"🚨 **FAKE NEWS**\nConfidence: {bert_conf:.2f}%")
+                    st.error(f"🚨 FAKE\nConfidence: {bert_conf:.2f}%")
                 else:
-                    st.success(f"✅ **REAL NEWS**\nConfidence: {bert_conf:.2f}%")
+                    st.success(f"✅ REAL\nConfidence: {bert_conf:.2f}%")
 
             with col3:
-                st.subheader("OpenRouter (LLM)")
+                st.markdown("**OpenRouter (LLM)**")
                 if llm_is_fake is True:
-                    st.error("🚨 **FAKE NEWS**\n(Based on world knowledge)")
+                    st.error("🚨 FAKE\n(Gave reasoning)")
                 elif llm_is_fake is False:
-                    st.success("✅ **REAL NEWS**\n(Based on world knowledge)")
+                    st.success("✅ REAL\n(Gave reasoning)")
                 elif llm_error:
                     st.error(f"API Error: {llm_error}")
-                else:
-                    st.warning("Unknown error.")
