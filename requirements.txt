@@ -19,3 +19,4 @@ lime>=0.2
 streamlit>=1.36
 gdown
 openai
+huggingface_hub
