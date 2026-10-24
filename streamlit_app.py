@@ -4,7 +4,7 @@ import torch
 import gdown
 import zipfile
 import os
-from google import genai
+from groq import Groq
 from transformers import pipeline
 
 # --- Page Config ---
@@ -15,7 +15,7 @@ st.markdown("""
 This application uses **three** models to detect if a news article is **Real** or **Fake**.
 *   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
 *   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
-*   **Gemini AI:** Google's Large Language Model (Real-world knowledge)
+*   **Llama 3 (via Groq):** Modern LLM (Real-world knowledge)
 """)
 
 # --- Load Models ---
@@ -67,23 +67,27 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
-            # 3. Gemini API Prediction
+            # 3. Groq (Llama 3) Prediction
             try:
-                client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                client = Groq(api_key=st.secrets["GROQ_API_KEY"])
                 prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
                 
-                # Updated to the new model and stable v1 API
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash", 
-                    contents=prompt,
-                    config={'http_options': {'api_version': 'v1'}}
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    model="llama-3.1-8b-instant", # A fast, capable, and free model
                 )
-                gemini_pred = response.text.strip().upper()
-                gemini_is_fake = True if "FAKE" in gemini_pred else False
-                gemini_error = None
+                
+                llm_pred = chat_completion.choices[0].message.content.strip().upper()
+                llm_is_fake = True if "FAKE" in llm_pred else False
+                llm_error = None
             except Exception as e:
-                gemini_is_fake = None
-                gemini_error = str(e) # Store the exact error to show on screen
+                llm_is_fake = None
+                llm_error = str(e)
 
             # --- Display Results ---
             st.divider()
@@ -104,13 +108,12 @@ if st.button("Analyze Article", type="primary"):
                     st.success(f"✅ **REAL NEWS**\nConfidence: {bert_conf:.2f}%")
 
             with col3:
-                st.subheader("Google Gemini AI")
-                if gemini_is_fake is True:
+                st.subheader("Groq (Llama 3)")
+                if llm_is_fake is True:
                     st.error("🚨 **FAKE NEWS**\n(Based on world knowledge)")
-                elif gemini_is_fake is False:
+                elif llm_is_fake is False:
                     st.success("✅ **REAL NEWS**\n(Based on world knowledge)")
-                elif gemini_error:
-                    # This will now show the exact API error instead of a generic message!
-                    st.error(f"API Error: {gemini_error}")
+                elif llm_error:
+                    st.error(f"API Error: {llm_error}")
                 else:
                     st.warning("Unknown error.")
