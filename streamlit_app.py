@@ -4,7 +4,7 @@ import torch
 import gdown
 import zipfile
 import os
-from groq import Groq
+from openai import OpenAI
 from transformers import pipeline
 
 # --- Page Config ---
@@ -15,7 +15,7 @@ st.markdown("""
 This application uses **three** models to detect if a news article is **Real** or **Fake**.
 *   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
 *   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
-*   **Llama 3 (via Groq):** Modern LLM (Real-world knowledge)
+*   **OpenRouter (LLM):** Modern LLM (Real-world knowledge)
 """)
 
 # --- Load Models ---
@@ -67,22 +67,19 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
-            # 3. Groq (Llama 3) Prediction
+            # 3. OpenRouter Prediction
             try:
-                client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+                client = OpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=st.secrets["OPENROUTER_API_KEY"],
+                )
                 prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
                 
-                chat_completion = client.chat.completions.create(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ],
-                    model="llama-3.1-8b-instant", # A fast, capable, and free model
+                response = client.chat.completions.create(
+                    model="nvidia/nemotron-3.5-lightning:free", 
+                    messages=[{"role": "user", "content": prompt}],
                 )
-                
-                llm_pred = chat_completion.choices[0].message.content.strip().upper()
+                llm_pred = response.choices[0].message.content.strip().upper()
                 llm_is_fake = True if "FAKE" in llm_pred else False
                 llm_error = None
             except Exception as e:
@@ -108,7 +105,7 @@ if st.button("Analyze Article", type="primary"):
                     st.success(f"✅ **REAL NEWS**\nConfidence: {bert_conf:.2f}%")
 
             with col3:
-                st.subheader("Groq (Llama 3)")
+                st.subheader("OpenRouter (LLM)")
                 if llm_is_fake is True:
                     st.error("🚨 **FAKE NEWS**\n(Based on world knowledge)")
                 elif llm_is_fake is False:
