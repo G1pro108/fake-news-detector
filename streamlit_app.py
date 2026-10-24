@@ -2,6 +2,9 @@ import streamlit as st
 import joblib
 from pathlib import Path
 import torch
+import gdown
+import zipfile
+import os
 from transformers import pipeline
 
 # --- Page Config ---
@@ -24,9 +27,21 @@ def load_baseline():
 
 @st.cache_resource
 def load_bert():
-    bert_dir = str(Path("models/bert/final").resolve())
-    # device=-1 forces CPU
-    nlp = pipeline("text-classification", model=bert_dir, tokenizer=bert_dir, device=-1) 
+    # ⚠️ PASTE YOUR GOOGLE DRIVE FILE ID HERE ⚠️
+    file_id = "1CKCQZBh-EtmuHK7uLNPXKcjSi3iDA3AQ" 
+    download_path = "bert_model.zip"
+    
+    # Check if we already downloaded and extracted it
+    if not os.path.exists("./final"):
+        url = f'https://drive.google.com/uc?id={file_id}'
+        gdown.download(url, download_path, quiet=False)
+        
+        # Unzip the model
+        with zipfile.ZipFile(download_path, 'r') as zip_ref:
+            zip_ref.extractall(".")
+            
+    # Load the pipeline from the extracted folder
+    nlp = pipeline("text-classification", model="./final", tokenizer="./final", device=-1) 
     return nlp
 
 try:
@@ -34,7 +49,7 @@ try:
     bert_model = load_bert()
     models_loaded = True
 except Exception as e:
-    st.error(f"Error loading models. Make sure your models are saved in the correct folders. Details: {e}")
+    st.error(f"Error loading models. Details: {e}")
     models_loaded = False
 
 # --- UI Layout ---
@@ -53,8 +68,7 @@ if st.button("Analyze Article", type="primary"):
             base_conf = base_proba[base_pred] * 100
             
             # 2. BERT Prediction
-            bert_result = bert_model(text_input[:2000])[0] # Truncate to 2000 chars for safety
-            # The pipeline returns LABEL_0 (Real) or LABEL_1 (Fake)
+            bert_result = bert_model(text_input[:2000])[0] 
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
