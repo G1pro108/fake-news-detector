@@ -11,6 +11,8 @@ import pytesseract
 import cv2
 import numpy as np
 import tempfile
+import time 
+from fast_c2pa_python import read_c2pa_from_bytes # NEW IMPORT
 
 # --- Page Config ---
 st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
@@ -19,6 +21,47 @@ st.title("🛡️ Multimodal Fake News & Deepfake Detector")
 st.markdown("""
 Protect yourself from misinformation. You can **paste text, paste a URL, or upload images, text files, and video clips (MP4)**.
 """)
+
+# --- C2PA PROVENANCE CHECK FUNCTION ---
+def analyze_c2pa_metadata(uploaded_file):
+    """Reads C2PA manifest and returns a verdict."""
+    if uploaded_file is None:
+        return None
+    
+    # C2PA is usually only present in images/videos, not text files
+    if uploaded_file.name.endswith('.txt'):
+        return {"status": "N/A", "summary": "C2PA check skipped for text files."}
+        
+    try:
+        file_bytes = uploaded_file.getvalue()
+        mime_type = uploaded_file.type
+        metadata = read_c2pa_from_bytes(file_bytes, mime_type)
+        validation_state = metadata.get('validation_state', 'Unknown')
+        
+        if validation_state == 'Valid':
+            active_manifest_id = metadata.get('active_manifest')
+            manifest = metadata.get('manifests', {}).get(active_manifest_id, {})
+            signer = manifest.get('signature_info', {}).get('issuer', 'Unknown')
+            
+            is_ai_generated = False
+            for assertion in manifest.get('assertions', []):
+                if 'c2pa.ai_generative_training' in assertion.get('label', ''):
+                    is_ai_generated = True
+                    break
+            
+            return {
+                "status": "Valid",
+                "signer": signer,
+                "is_ai_generated_claim": is_ai_generated,
+                "summary": f"Valid manifest found. Signed by {signer}."
+            }
+        elif validation_state == 'Invalid':
+            return {"status": "Invalid", "summary": "Manifest found but signature is invalid. The file may have been tampered with."}
+        else:
+            return {"status": "No Manifest", "summary": "No C2PA manifest found. Provenance cannot be verified."}
+            
+    except Exception as e:
+        return {"status": "No Manifest", "summary": "No C2PA manifest found."}
 
 # --- GLOBAL TRUSTED SOURCES DATABASE ---
 TRUSTED_SOURCES = [
@@ -52,13 +95,11 @@ def extract_video_frames(video_file):
     
     frames = []
     if total_frames > 0:
-        # Extract 3 frames evenly spaced across the video
         frame_indices = [int(total_frames * 0.2), int(total_frames * 0.5), int(total_frames * 0.8)]
         for idx in frame_indices:
             vidcap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             success, image = vidcap.read()
             if success:
-                # Convert BGR to RGB
                 image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 frames.append(Image.fromarray(image_rgb))
     vidcap.release()
@@ -80,9 +121,14 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
     is_image = False
     is_video = False
     ai_media_verdict = None
+    media_api_failed = False
+    c2pa_result = None # Initialize C2PA result
     
     if uploaded_file is not None:
         filename = uploaded_file.name.lower()
+        
+        # Run C2PA Check immediately
+        c2pa_result = analyze_c2pa_metadata(uploaded_file)
         
         # 1. TEXT FILE
         if filename.endswith('.txt'):
@@ -97,19 +143,18 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             if input_text:
                 st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
             
-            # AI Image detection
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                img_res = hf_client.image_classification(img, model="umm-maybe/AI-image-detector")
-                if img_res[0]['label'].lower() in ['artificial', 'fake', 'ai']:
+                img_res = hf_client.image_classification(img, model="dima806/deepfake_vs_real_image_detection")
+                if img_res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']:
                     ai_media_verdict = True
-                    st.error(f"🚨 **Image is AI-Generated** (Confidence: {img_res[0]['score']*100:.1f}%)")
+                    st.error(f"🚨 **Image is AI-Generated/Deepfake** (Confidence: {img_res[0]['score']*100:.1f}%)")
                 else:
                     ai_media_verdict = False
             except Exception:
-                pass
+                media_api_failed = True
                 
-        # 3. VIDEO FILE (DEEPFAKE DETECTION)
+        # 3. VIDEO FILE
         elif filename.endswith(('.mp4', '.mov')):
             is_video = True
             with st.spinner("Extracting frames from video for deepfake analysis..."):
@@ -118,24 +163,34 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
                 if not frames:
                     st.error("Could not extract frames from this video.")
                 else:
-                    st.info(f"🎞️ **Video processed. Extracted {len(frames)} frames for AI analysis.**")
+                    st.info(f"🎞️ **Video processed. Extracted {len(frames)} frames.** Scanning for deepfakes...")
                     ai_votes = 0
+                    successful_api_calls = 0
+                    
                     try:
                         hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
                         for frame in frames:
-                            res = hf_client.image_classification(frame, model="umm-maybe/AI-image-detector")
-                            if res[0]['label'].lower() in ['artificial', 'fake', 'ai']:
-                                ai_votes += 1
+                            for attempt in range(3):
+                                try:
+                                    res = hf_client.image_classification(frame, model="dima806/deepfake_vs_real_image_detection")
+                                    successful_api_calls += 1
+                                    if res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']:
+                                        ai_votes += 1
+                                    break 
+                                except Exception:
+                                    time.sleep(1.5) 
                         
-                        # If at least 2 out of 3 frames are flagged, the video is a deepfake
-                        if ai_votes >= 2:
+                        if successful_api_calls == 0:
+                            media_api_failed = True
+                        elif ai_votes >= 2:
                             ai_media_verdict = True
                             st.error(f"🚨 **This video is likely AI-Generated (Deepfake)!** ({ai_votes}/{len(frames)} frames flagged).")
                         else:
                             ai_media_verdict = False
-                            st.success("✅ **This video appears to be real.**")
+                            st.success(f"✅ **This video appears to be real.** ({ai_votes}/{len(frames)} frames flagged).")
+                            
                     except Exception as e:
-                        st.warning("Video AI detection API timed out. Relying on text analysis (if any).")
+                        media_api_failed = True
                         
     elif text_input.strip():
         input_text = text_input.strip()
@@ -145,7 +200,6 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
     else:
         with st.spinner("Running Multimodal AI Analysis..."):
             
-            # If text was extracted or pasted, run text analysis
             is_ai_text = False
             base_pred = 0
             base_conf = 0
@@ -209,6 +263,7 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
 
             # --- FINAL VERDICT LOGIC ---
             final_is_fake = False
+            
             if clean_text:
                 final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
                 if is_ai_text: final_is_fake = True 
@@ -218,9 +273,22 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             if ai_media_verdict is True: 
                 final_is_fake = True 
 
+            # --- C2PA OVERRIDE LOGIC ---
+            if c2pa_result:
+                if c2pa_result["status"] == "Valid" and c2pa_result["is_ai_generated_claim"]:
+                    final_is_fake = True # Cryptographic proof it's AI-generated
+                elif c2pa_result["status"] == "Valid" and c2pa_result["signer"] and "OpenAI" in c2pa_result["signer"]:
+                    final_is_fake = True # Strong signal from AI generator
+
             st.divider()
             st.subheader("🏆 Final Verdict")
             
+            # Handle API Failure gracefully
+            if media_api_failed and (is_video or is_image):
+                st.warning("⚠️ **AI Media Detection API timed out.** Hugging Face's free servers are currently overloaded. Please try the image/video again in a few minutes.")
+                if not clean_text:
+                    st.stop()
+
             if final_is_fake:
                 st.error("🚨 **OVERALL VERDICT: FAKE / MISLEADING / AI-GENERATED**")
                 if llm_reason: st.write(f"**Reason:** {llm_reason}")
@@ -230,6 +298,19 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             else:
                 st.success("✅ **OVERALL VERDICT: REAL / AUTHENTIC**")
                 if llm_reason: st.write(f"**Reason:** {llm_reason}")
+
+            # --- DISPLAY C2PA RESULTS ---
+            if c2pa_result:
+                st.write("---")
+                st.subheader("📜 C2PA Provenance Check")
+                if c2pa_result["status"] == "Valid":
+                    st.success(c2pa_result["summary"])
+                    if c2pa_result.get("is_ai_generated_claim"):
+                        st.error("🚨 **Manifest explicitly states this file was AI-Generated.**")
+                elif c2pa_result["status"] == "Invalid":
+                    st.error(c2pa_result["summary"])
+                else:
+                    st.warning(c2pa_result["summary"])
 
             if clean_text:
                 st.write("---")
