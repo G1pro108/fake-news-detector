@@ -11,6 +11,12 @@ from transformers import pipeline
 st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wide")
 
 st.title("📰 Fake News Detector")
+st.markdown("""
+This application uses **three** models to detect if a news article is **Real** or **Fake**.
+*   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
+*   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
+*   **Gemini AI:** Google's Large Language Model (Real-world knowledge)
+""")
 
 # --- Load Models ---
 @st.cache_resource
@@ -42,13 +48,13 @@ except Exception as e:
     models_loaded = False
 
 # --- UI Layout ---
-text_input = st.text_area("Paste the news article here:", height=200)
+text_input = st.text_area("Paste the news article here:", height=200, placeholder="Enter title and body text...")
 
 if st.button("Analyze Article", type="primary"):
     if not text_input.strip():
         st.warning("Please enter some text to analyze.")
     elif models_loaded:
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing with all 3 models..."):
             
             # 1. Baseline Prediction
             text_vec = tfidf.transform([text_input])
@@ -61,16 +67,23 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
-            # 3. Gemini API Prediction (FORCING ERRORS TO SHOW)
-            # We are removing the try/except here so if it fails, Streamlit shows a red error!
-            api_key = st.secrets["GEMINI_API_KEY"]
-            client = genai.Client(api_key=api_key)
-            prompt = f"Is this news REAL or FAKE? Reply strictly with only the word 'REAL' or 'FAKE'. Article: {text_input[:4000]}"
-            
-            # Using gemini-1.5-flash as it is the standard free-tier model
-            response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-            gemini_pred = response.text.strip().upper()
-            gemini_is_fake = True if "FAKE" in gemini_pred else False
+            # 3. Gemini API Prediction
+            try:
+                client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
+                
+                # Updated to the new model and stable v1 API
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash", 
+                    contents=prompt,
+                    config={'http_options': {'api_version': 'v1'}}
+                )
+                gemini_pred = response.text.strip().upper()
+                gemini_is_fake = True if "FAKE" in gemini_pred else False
+                gemini_error = None
+            except Exception as e:
+                gemini_is_fake = None
+                gemini_error = str(e) # Store the exact error to show on screen
 
             # --- Display Results ---
             st.divider()
@@ -93,6 +106,11 @@ if st.button("Analyze Article", type="primary"):
             with col3:
                 st.subheader("Google Gemini AI")
                 if gemini_is_fake is True:
-                    st.error("🚨 **FAKE NEWS**")
+                    st.error("🚨 **FAKE NEWS**\n(Based on world knowledge)")
+                elif gemini_is_fake is False:
+                    st.success("✅ **REAL NEWS**\n(Based on world knowledge)")
+                elif gemini_error:
+                    # This will now show the exact API error instead of a generic message!
+                    st.error(f"API Error: {gemini_error}")
                 else:
-                    st.success("✅ **REAL NEWS**")
+                    st.warning("Unknown error.")
