@@ -13,6 +13,8 @@ import numpy as np
 import tempfile
 import time
 import c2pa
+import base64
+from io import BytesIO
 
 # --- Page Config ---
 st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
@@ -54,7 +56,6 @@ def analyze_c2pa_metadata(uploaded_file):
                 is_ai_generated = True
         return {"status": "Valid", "signer": signer, "is_ai_generated_claim": is_ai_generated, "summary": f"Valid C2PA manifest. Signed by: {signer}."}
     except Exception:
-        # Fixed C2PA Error Message
         return {"status": "No Manifest", "summary": "Format unsupported or metadata stripped. (Normal for most web videos/images)."}
 
 # --- LOAD BASELINE MODEL ---
@@ -94,12 +95,10 @@ text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120)
 st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
 uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"])
 
-# --- NEW BUTTON LAYOUT (ANALYZE + REFRESH) ---
 col_btn1, col_btn2 = st.columns([1, 1])
 with col_btn1:
     analyze_clicked = st.button("Analyze Now", type="primary", use_container_width=True)
 with col_btn2:
-    # REFRESH BUTTON ADDED
     if st.button("🔄 Start Over / Refresh", use_container_width=True):
         st.rerun()
 
@@ -118,6 +117,7 @@ if analyze_clicked:
         if filename.endswith('.txt'):
             input_text = uploaded_file.read().decode("utf-8")
             st.info("📄 **Text file loaded.**")
+            
         elif filename.endswith(('.jpg', '.jpeg', '.png')):
             is_image = True
             img = Image.open(uploaded_file)
@@ -125,7 +125,6 @@ if analyze_clicked:
             if input_text: st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                # UPGRADED IMAGE MODEL
                 img_res = hf_client.image_classification(img, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
                 top_label = img_res[0]['label'].lower()
                 if 'ai' in top_label or 'fake' in top_label:
@@ -134,40 +133,72 @@ if analyze_clicked:
                 else:
                     ai_media_verdict = False
             except Exception: media_api_failed = True
+                
         elif filename.endswith(('.mp4', '.mov')):
             is_video = True
             with st.spinner("Extracting frames from video..."):
                 frames = extract_video_frames(uploaded_file)
-                if not frames: st.error("Could not extract frames.")
+                if not frames: 
+                    st.error("Could not extract frames.")
                 else:
                     st.info(f"🎞️ **Video processed. Extracting {len(frames)} frames.**")
+                    
+                    # --- DUAL-LAYER VIDEO DETECTION ---
+                    hf_success = False
                     ai_votes = 0
-                    successful_calls = 0
+                    
+                    # Layer 1: Try Hugging Face API
                     try:
                         hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
                         for frame in frames:
-                            for attempt in range(3):
-                                try:
-                                    # UPGRADED VIDEO MODEL
-                                    res = hf_client.image_classification(frame, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
-                                    successful_calls += 1
-                                    top_label = res[0]['label'].lower()
-                                    if 'ai' in top_label or 'fake' in top_label: 
-                                        ai_votes += 1
-                                    break 
-                                except Exception: time.sleep(1.5) 
-                        
-                        if successful_calls == 0:
+                            res = hf_client.image_classification(frame, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
+                            top_label = res[0]['label'].lower()
+                            if 'ai' in top_label or 'fake' in top_label: 
+                                ai_votes += 1
+                        hf_success = True
+                    except Exception:
+                        hf_success = False
+
+                    # Layer 2: If HF fails, use OpenRouter Vision AI
+                    if not hf_success:
+                        st.warning("Hugging Face API timed out. Switching to Vision AI Fallback...")
+                        try:
+                            buffered = BytesIO()
+                            frames[0].save(buffered, format="JPEG")
+                            base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                            
+                            vision_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.secrets["OPENROUTER_API_KEY"])
+                            vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
+                            
+                            vision_response = vision_client.chat.completions.create(
+                                model="qwen/qwen-2-vl-7b-instruct:free",
+                                messages=[{
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": vision_prompt},
+                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                                    ]
+                                }]
+                            )
+                            vision_verdict = vision_response.choices[0].message.content.strip().upper()
+                            
+                            if "AI-GENERATED" in vision_verdict or "FAKE" in vision_verdict:
+                                ai_media_verdict = True
+                                st.error("🚨 **Vision AI detected this video as AI-Generated!**")
+                            else:
+                                ai_media_verdict = False
+                                st.success("✅ **Vision AI analyzed the frame and determined it is Real.**")
+                                
+                        except Exception as e:
                             media_api_failed = True
-                            st.warning("⚠️ Hugging Face API failed to process video frames. Defaulting to text analysis only.")
-                        elif ai_votes >= 2:
+                            st.warning(f"⚠️ Both Hugging Face and Vision AI failed. Error: {e}")
+                    else:
+                        if ai_votes >= 2:
                             ai_media_verdict = True
                             st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
                         else:
                             ai_media_verdict = False
                             st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
-                    except Exception: 
-                        media_api_failed = True
                         
     elif text_input.strip():
         input_text = text_input.strip()
