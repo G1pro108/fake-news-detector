@@ -24,3 +24,4 @@ duckduckgo_search
 pytesseract
 opencv-python-headless
 c2pa-python
+groq
