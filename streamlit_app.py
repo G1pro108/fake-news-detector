@@ -8,12 +8,32 @@ from huggingface_hub import InferenceClient
 from duckduckgo_search import DDGS
 
 # --- Page Config ---
-st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wide")
+st.set_page_config(page_title="Global Fake News Detector", page_icon="🌍", layout="wide")
 
-st.title("📰 Fake News Detector & Threat Analyzer")
+st.title("🌍 Global Fake News Detector & Threat Analyzer")
 st.markdown("""
-This app uses **3 AI Models + RAG + Reverse Engineering** to detect if a news article is **Real** or **Fake**.
+This app uses **3 AI Models + RAG + Reverse Engineering** to detect if a news article is **Real** or **Fake**. It supports global news sources and detects known satire sites.
 """)
+
+# --- GLOBAL TRUSTED SOURCES DATABASE ---
+TRUSTED_SOURCES = [
+    # Global / International
+    'reuters.com', 'apnews.com', 'bbc.com', 'bbc.co.uk', 'aljazeera.com', 'npr.org', 'bloomberg.com',
+    # North America
+    'nytimes.com', 'washingtonpost.com', 'wsj.com', 'cnn.com', 'foxnews.com', 'nbcnews.com', 'cbsnews.com', 'cbc.ca', 'theglobeandmail.com',
+    # Europe
+    'theguardian.com', 'telegraph.co.uk', 'independent.co.uk', 'ft.com', 'dw.com', 'france24.com', 'lemonde.fr', 'spiegel.de', 'euronews.com',
+    # Asia & India
+    'timesofindia.indiatimes.com', 'thehindu.com', 'indianexpress.com', 'ndtv.com', 'hindustantimes.com', 'pib.gov.in',
+    'scmp.com', 'straitstimes.com', 'japantimes.co.jp', 'thejakartapost.com',
+    # Middle East & Africa
+    'haaretz.com', 'jpost.com', 'khaleejtimes.com', 'gulfnews.com', 'news24.com', 'allafrica.com'
+]
+
+SATIRE_SOURCES = [
+    'theonion.com', 'fakingnews.com', 'worldnewsdailyreport.com', 'thefauxy.com', 
+    'thebeaverton.com', 'clickhole.com', 'reductress.com', 'theborowitzreport.com'
+]
 
 # --- Load Local Baseline Model ---
 @st.cache_resource
@@ -30,16 +50,15 @@ except Exception as e:
     models_loaded = False
 
 # --- UI Layout ---
-text_input = st.text_area("Paste the news article here:", height=200, placeholder="Enter title and body text...")
+text_input = st.text_area("Paste the news article here (or drop a URL):", height=200, placeholder="Enter title, body text, or URL...")
 
 if st.button("Analyze Article", type="primary"):
     if not text_input.strip():
         st.warning("Please enter some text to analyze.")
     elif models_loaded:
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing globally..."):
             
             # --- 0. CLEAN THE TEXT ---
-            # Remove URLs and "Read more at" for cleaner analysis
             clean_text = re.sub(r'http\S+', '', text_input)
             clean_text = clean_text.replace('Read more at:', '').replace('..', '.').strip()
             
@@ -49,7 +68,7 @@ if st.button("Analyze Article", type="primary"):
             base_proba = base_model.predict_proba(text_vec)[0]
             base_conf = base_proba[base_pred] * 100
 
-            # 2. Modern Deep Learning (Using a lighter, reliable model)
+            # 2. Modern Deep Learning (DeBERTa)
             bert_is_fake = None
             bert_conf = 0
             try:
@@ -57,51 +76,46 @@ if st.button("Analyze Article", type="primary"):
                 result = hf_client.zero_shot_classification(
                     clean_text[:1000],
                     candidate_labels=["fake news", "real news"],
-                    model="cross-encoder/nli-distilroberta-base" # Lighter model to prevent timeouts
+                    model="cross-encoder/nli-distilroberta-base"
                 )
                 top_prediction = result[0]
                 bert_is_fake = True if top_prediction['label'] == "fake news" else False
                 bert_conf = top_prediction['score'] * 100
-            except Exception as e:
-                st.warning(f"Deep Learning API bypassed due to timeout.")
+            except Exception:
+                pass # Skip if API fails
 
-            # --- 3. REVERSE ENGINEERING (RAE) ---
+            # --- 3. REVERSE ENGINEERING (GLOBAL DATABASE) ---
             re_origin = "Unknown"
-            re_trust = "Medium"
+            re_trust = "Medium (Unverified)"
+            is_satire = False
             
             # Check if user pasted a URL
             url_match = re.search(r'https?://[^\s]+', text_input)
             if url_match:
                 domain = url_match.group(0).split('/')[2].replace('www.', '')
                 re_origin = f"URL Provided: {domain}"
-                
-                # Check against trusted Indian & Global sources
-                trusted_sources = ['timesofindia.indiatimes.com', 'thehindu.com', 'indianexpress.com', 
-                                   'ndtv.com', 'hindustantimes.com', 'reuters.com', 'bbc.com', 
-                                   'pib.gov.in', 'apnews.com']
-                
-                if any(trusted in domain for trusted in trusted_sources):
-                    re_trust = "High (Credible Source)"
-                else:
-                    re_trust = "Low (Unknown Source)"
             else:
-                # If no URL, search the web for the exact text
+                # Search the web for the exact text
                 try:
                     search_query = clean_text[:80].replace('"', '')
                     exact_search = DDGS().text(f'"{search_query}"', max_results=1)
                     if exact_search:
                         domain = exact_search[0]['href'].split('/')[2].replace('www.', '')
                         re_origin = domain
-                        trusted_sources = ['timesofindia.indiatimes.com', 'thehindu.com', 'indianexpress.com', 'ndtv.com', 'hindustantimes.com', 'reuters.com', 'bbc.com']
-                        if any(trusted in domain for trusted in trusted_sources):
-                            re_trust = "High (Credible Source)"
-                        else:
-                            re_trust = "Medium (Unknown Source)"
                     else:
                         re_origin = "No exact match found online"
-                        re_trust = "Low (Unverified)"
                 except:
-                    pass
+                    domain = ""
+
+            # Evaluate the domain against global lists
+            if domain:
+                if any(satire in domain for satire in SATIRE_SOURCES):
+                    re_trust = "Low (Known Satire/Fake Site)"
+                    is_satire = True
+                elif any(trusted in domain for trusted in TRUSTED_SOURCES):
+                    re_trust = "High (Verified Global News Source)"
+                else:
+                    re_trust = "Medium (Unverified/Unknown Source)"
 
             # 4. OpenRouter Prediction (RAG + LLM)
             llm_is_fake = None
@@ -109,7 +123,6 @@ if st.button("Analyze Article", type="primary"):
             llm_action = "No action needed."
             
             try:
-                # RAG Step
                 search_results = DDGS().text(clean_text[:150], max_results=3)
                 context_text = "\n".join([f"- {r['title']}: {r['body']}" for r in search_results])
                 
@@ -118,18 +131,24 @@ if st.button("Analyze Article", type="primary"):
                     api_key=st.secrets["OPENROUTER_API_KEY"],
                 )
                 
-                # We add the Reverse Engineering findings directly into the prompt!
+                # Passing the Global RAE logic to the LLM
                 prompt = f"""
-                Analyze the following news article based on this live web context.
+                Analyze the following news article.
                 Web Context: {context_text}
                 
-                IMPORTANT: Reverse engineering traced the original source to: '{re_origin}' with a Trust Level of '{re_trust}'.
-                If the Trust Level is 'High', you should strongly lean towards REAL, unless the text is obviously satire.
+                REVERSE ENGINEERING DATA:
+                - Traced Origin: '{re_origin}'
+                - Trust Level: '{re_trust}'
                 
-                Return ONLY a valid JSON object with exactly these three keys:
+                Rules:
+                1. If the Trust Level is 'High', assume the article is REAL unless the text is clearly a joke.
+                2. If the Trust Level is 'Low (Known Satire)', it is FAKE.
+                3. Rely on your own global knowledge to verify the facts.
+                
+                Return ONLY a valid JSON object with exactly these keys:
                 "verdict": "REAL" or "FAKE",
-                "reason": "A short 1-2 sentence explanation.",
-                "action": "If FAKE, mention reporting to cybercrime.gov.in. If REAL, say 'No action needed'."
+                "reason": "1-2 sentences explaining why based on facts and the traced origin.",
+                "action": "If FAKE, advise reporting to cybercrime.gov.in. If REAL, say 'No action needed'."
                 
                 Article: {clean_text[:4000]}
                 """
@@ -152,13 +171,13 @@ if st.button("Analyze Article", type="primary"):
             except Exception as e:
                 st.error(f"LLM API Error: {e}")
 
-            # --- ENSEMBLE VOTING (Rule-Based) ---
-            # If Reverse Engineering finds a "High Trust" source, the final verdict is REAL.
-            # Otherwise, rely on the LLM's verdict.
+            # --- ENSEMBLE VOTING (Global Rule-Based) ---
             final_is_fake = False
             
-            if "High" in re_trust:
-                final_is_fake = False # Trusted source overrides everything
+            if is_satire:
+                final_is_fake = True # Hard rule: Satire is always fake
+            elif "High" in re_trust:
+                final_is_fake = False # Hard rule: Trusted source is real
             else:
                 final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
 
