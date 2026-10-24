@@ -20,11 +20,10 @@ This application uses two Machine Learning models to detect if a news article is
 # --- Load Models (Cached so it only loads once) ---
 @st.cache_resource
 def load_baseline():
-    base_dir = Path("models/baseline")
-    tfidf = joblib.load(base_dir / "tfidf.pkl")
-    model = joblib.load(base_dir / "logreg.pkl")
+    # Since the files are in the root directory on GitHub:
+    tfidf = joblib.load("tfidf.pkl")
+    model = joblib.load("logreg.pkl")
     return tfidf, model
-
 @st.cache_resource
 def load_bert():
     # ⚠️ PASTE YOUR GOOGLE DRIVE FILE ID HERE ⚠️
