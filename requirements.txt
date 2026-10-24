@@ -9,6 +9,7 @@ beautifulsoup4>=4.12
 joblib>=1.4
 tqdm>=4.66
 torch>=2.3
+torchvision
 transformers>=4.42
 datasets>=2.20
 accelerate>=0.31
