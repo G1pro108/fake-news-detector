@@ -90,16 +90,23 @@ def extract_video_frames(video_file):
     os.remove(tfile.name)
     return frames
 
+# --- SESSION STATE FOR CLEARING INPUTS ---
+if 'form_key' not in st.session_state:
+    st.session_state.form_key = 0
+
 # --- UNIFIED UI LAYOUT ---
-text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120)
+# The dynamic 'key' forces Streamlit to clear the widgets when form_key changes
+text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120, key=f"text_{st.session_state.form_key}")
 st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
-uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"])
+uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"], key=f"file_{st.session_state.form_key}")
 
 col_btn1, col_btn2 = st.columns([1, 1])
 with col_btn1:
     analyze_clicked = st.button("Analyze Now", type="primary", use_container_width=True)
 with col_btn2:
     if st.button("🔄 Start Over / Refresh", use_container_width=True):
+        # Increment the key to reset the widgets
+        st.session_state.form_key += 1
         st.rerun()
 
 if analyze_clicked:
@@ -171,7 +178,7 @@ if analyze_clicked:
                             vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
                             
                             vision_response = vision_client.chat.completions.create(
-                                model="nvidia/nemotron-nano-12b-v2-vl:free",
+                                model="nvidia/nemotron-nano-12b-v2-vl:free",  # Updated current free vision model
                                 messages=[{
                                     "role": "user",
                                     "content": [
