@@ -171,7 +171,7 @@ if analyze_clicked:
                             vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
                             
                             vision_response = vision_client.chat.completions.create(
-                                model="qwen/qwen-2-vl-7b-instruct:free",
+                                model="nvidia/nemotron-nano-12b-v2-vl:free",
                                 messages=[{
                                     "role": "user",
                                     "content": [
