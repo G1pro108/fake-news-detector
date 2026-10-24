@@ -21,3 +21,4 @@ gdown
 openai
 huggingface_hub
 duckduckgo_search
+pytesseract
