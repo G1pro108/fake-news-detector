@@ -1,11 +1,10 @@
 import streamlit as st
 import joblib
-from pathlib import Path
 import torch
 import gdown
 import zipfile
 import os
-import google.generativeai as genai
+from google import genai
 from transformers import pipeline
 
 # --- Page Config ---
@@ -16,13 +15,12 @@ st.markdown("""
 This application uses **three** models to detect if a news article is **Real** or **Fake**.
 *   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
 *   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
-*   **Gemini AI:** Google's Large Language Model (Real-world knowledge up to 2025)
+*   **Gemini AI:** Google's Large Language Model (Real-world knowledge)
 """)
 
 # --- Load Models ---
 @st.cache_resource
 def load_baseline():
-    # Assuming files are in the root directory
     tfidf = joblib.load("tfidf.pkl")
     model = joblib.load("logreg.pkl")
     return tfidf, model
@@ -50,9 +48,6 @@ except Exception as e:
     models_loaded = False
 
 # --- UI Layout ---
-# You need to replace this with your actual API key
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-
 text_input = st.text_area("Paste the news article here:", height=200, placeholder="Enter title and body text...")
 
 if st.button("Analyze Article", type="primary"):
@@ -72,12 +67,12 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
-            # 3. Gemini API Prediction
+            # 3. Gemini API Prediction (New SDK)
             try:
-                genai.configure(api_key=GEMINI_API_KEY)
-                gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                # The new SDK uses this syntax:
+                client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                 prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
-                response = gemini_model.generate_content(prompt)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                 gemini_pred = response.text.strip().upper()
                 gemini_is_fake = True if "FAKE" in gemini_pred else False
             except Exception as e:
@@ -104,8 +99,8 @@ if st.button("Analyze Article", type="primary"):
             with col3:
                 st.subheader("Google Gemini AI")
                 if gemini_is_fake is True:
-                    st.error(f"🚨 **FAKE NEWS**\n(Based on world knowledge)")
+                    st.error("🚨 **FAKE NEWS**\n(Based on world knowledge)")
                 elif gemini_is_fake is False:
-                    st.success(f"✅ **REAL NEWS**\n(Based on world knowledge)")
+                    st.success("✅ **REAL NEWS**\n(Based on world knowledge)")
                 else:
                     st.warning("API Key missing or invalid.")
