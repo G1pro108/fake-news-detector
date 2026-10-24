@@ -12,7 +12,6 @@ import cv2
 import numpy as np
 import tempfile
 import time 
-from fast_c2pa_python import read_c2pa_from_bytes # NEW IMPORT
 
 # --- Page Config ---
 st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
@@ -21,47 +20,6 @@ st.title("🛡️ Multimodal Fake News & Deepfake Detector")
 st.markdown("""
 Protect yourself from misinformation. You can **paste text, paste a URL, or upload images, text files, and video clips (MP4)**.
 """)
-
-# --- C2PA PROVENANCE CHECK FUNCTION ---
-def analyze_c2pa_metadata(uploaded_file):
-    """Reads C2PA manifest and returns a verdict."""
-    if uploaded_file is None:
-        return None
-    
-    # C2PA is usually only present in images/videos, not text files
-    if uploaded_file.name.endswith('.txt'):
-        return {"status": "N/A", "summary": "C2PA check skipped for text files."}
-        
-    try:
-        file_bytes = uploaded_file.getvalue()
-        mime_type = uploaded_file.type
-        metadata = read_c2pa_from_bytes(file_bytes, mime_type)
-        validation_state = metadata.get('validation_state', 'Unknown')
-        
-        if validation_state == 'Valid':
-            active_manifest_id = metadata.get('active_manifest')
-            manifest = metadata.get('manifests', {}).get(active_manifest_id, {})
-            signer = manifest.get('signature_info', {}).get('issuer', 'Unknown')
-            
-            is_ai_generated = False
-            for assertion in manifest.get('assertions', []):
-                if 'c2pa.ai_generative_training' in assertion.get('label', ''):
-                    is_ai_generated = True
-                    break
-            
-            return {
-                "status": "Valid",
-                "signer": signer,
-                "is_ai_generated_claim": is_ai_generated,
-                "summary": f"Valid manifest found. Signed by {signer}."
-            }
-        elif validation_state == 'Invalid':
-            return {"status": "Invalid", "summary": "Manifest found but signature is invalid. The file may have been tampered with."}
-        else:
-            return {"status": "No Manifest", "summary": "No C2PA manifest found. Provenance cannot be verified."}
-            
-    except Exception as e:
-        return {"status": "No Manifest", "summary": "No C2PA manifest found."}
 
 # --- GLOBAL TRUSTED SOURCES DATABASE ---
 TRUSTED_SOURCES = [
@@ -122,13 +80,9 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
     is_video = False
     ai_media_verdict = None
     media_api_failed = False
-    c2pa_result = None # Initialize C2PA result
     
     if uploaded_file is not None:
         filename = uploaded_file.name.lower()
-        
-        # Run C2PA Check immediately
-        c2pa_result = analyze_c2pa_metadata(uploaded_file)
         
         # 1. TEXT FILE
         if filename.endswith('.txt'):
@@ -273,17 +227,9 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             if ai_media_verdict is True: 
                 final_is_fake = True 
 
-            # --- C2PA OVERRIDE LOGIC ---
-            if c2pa_result:
-                if c2pa_result["status"] == "Valid" and c2pa_result["is_ai_generated_claim"]:
-                    final_is_fake = True # Cryptographic proof it's AI-generated
-                elif c2pa_result["status"] == "Valid" and c2pa_result["signer"] and "OpenAI" in c2pa_result["signer"]:
-                    final_is_fake = True # Strong signal from AI generator
-
             st.divider()
             st.subheader("🏆 Final Verdict")
             
-            # Handle API Failure gracefully
             if media_api_failed and (is_video or is_image):
                 st.warning("⚠️ **AI Media Detection API timed out.** Hugging Face's free servers are currently overloaded. Please try the image/video again in a few minutes.")
                 if not clean_text:
@@ -298,19 +244,6 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             else:
                 st.success("✅ **OVERALL VERDICT: REAL / AUTHENTIC**")
                 if llm_reason: st.write(f"**Reason:** {llm_reason}")
-
-            # --- DISPLAY C2PA RESULTS ---
-            if c2pa_result:
-                st.write("---")
-                st.subheader("📜 C2PA Provenance Check")
-                if c2pa_result["status"] == "Valid":
-                    st.success(c2pa_result["summary"])
-                    if c2pa_result.get("is_ai_generated_claim"):
-                        st.error("🚨 **Manifest explicitly states this file was AI-Generated.**")
-                elif c2pa_result["status"] == "Invalid":
-                    st.error(c2pa_result["summary"])
-                else:
-                    st.warning(c2pa_result["summary"])
 
             if clean_text:
                 st.write("---")
