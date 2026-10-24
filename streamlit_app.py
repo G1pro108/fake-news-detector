@@ -45,7 +45,7 @@ def analyze_c2pa_metadata(uploaded_file):
         os.remove(tmp_path)
         active_manifest_id = manifest_store.get('active_manifest')
         if not active_manifest_id:
-            return {"status": "No Manifest", "summary": "No C2PA manifest found."}
+            return {"status": "No Manifest", "summary": "No C2PA manifest found. Note: Most social media platforms strip metadata for privacy."}
         manifest = manifest_store.get('manifests', {}).get(active_manifest_id, {})
         signer = manifest.get('signature_info', {}).get('issuer', 'Unknown')
         is_ai_generated = False
@@ -54,7 +54,8 @@ def analyze_c2pa_metadata(uploaded_file):
                 is_ai_generated = True
         return {"status": "Valid", "signer": signer, "is_ai_generated_claim": is_ai_generated, "summary": f"Valid C2PA manifest. Signed by: {signer}."}
     except Exception:
-        return {"status": "No Manifest", "summary": "No C2PA manifest found or format unsupported."}
+        # Fixed C2PA Error Message
+        return {"status": "No Manifest", "summary": "Format unsupported or metadata stripped. (Normal for most web videos/images)."}
 
 # --- LOAD BASELINE MODEL ---
 @st.cache_resource
@@ -93,7 +94,16 @@ text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120)
 st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
 uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"])
 
-if st.button("Analyze Now", type="primary", use_container_width=True):
+# --- NEW BUTTON LAYOUT (ANALYZE + REFRESH) ---
+col_btn1, col_btn2 = st.columns([1, 1])
+with col_btn1:
+    analyze_clicked = st.button("Analyze Now", type="primary", use_container_width=True)
+with col_btn2:
+    # REFRESH BUTTON ADDED
+    if st.button("🔄 Start Over / Refresh", use_container_width=True):
+        st.rerun()
+
+if analyze_clicked:
     
     input_text = ""
     is_image = is_video = False
@@ -115,8 +125,10 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             if input_text: st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                img_res = hf_client.image_classification(img, model="dima806/deepfake_vs_real_image_detection")
-                if img_res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']:
+                # UPGRADED IMAGE MODEL
+                img_res = hf_client.image_classification(img, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
+                top_label = img_res[0]['label'].lower()
+                if 'ai' in top_label or 'fake' in top_label:
                     ai_media_verdict = True
                     st.error(f"🚨 **Image is AI-Generated/Deepfake** (Confidence: {img_res[0]['score']*100:.1f}%)")
                 else:
@@ -130,22 +142,33 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
                 else:
                     st.info(f"🎞️ **Video processed. Extracting {len(frames)} frames.**")
                     ai_votes = 0
+                    successful_calls = 0
                     try:
                         hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
                         for frame in frames:
                             for attempt in range(3):
                                 try:
-                                    res = hf_client.image_classification(frame, model="dima806/deepfake_vs_real_image_detection")
-                                    if res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']: ai_votes += 1
+                                    # UPGRADED VIDEO MODEL
+                                    res = hf_client.image_classification(frame, model="prithivMLmods/AI-vs-Deepfake-vs-Real")
+                                    successful_calls += 1
+                                    top_label = res[0]['label'].lower()
+                                    if 'ai' in top_label or 'fake' in top_label: 
+                                        ai_votes += 1
                                     break 
                                 except Exception: time.sleep(1.5) 
-                        if ai_votes >= 2:
+                        
+                        if successful_calls == 0:
+                            media_api_failed = True
+                            st.warning("⚠️ Hugging Face API failed to process video frames. Defaulting to text analysis only.")
+                        elif ai_votes >= 2:
                             ai_media_verdict = True
                             st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
                         else:
                             ai_media_verdict = False
                             st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
-                    except Exception: media_api_failed = True
+                    except Exception: 
+                        media_api_failed = True
+                        
     elif text_input.strip():
         input_text = text_input.strip()
         
@@ -184,17 +207,14 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
                     domain = url_match.group(0).split('/')[2].replace('www.', '')
                     re_origin = f"URL Provided: {domain}"
                 else:
-                    # Clean text specifically for searching (remove punctuation and line breaks)
                     search_text = re.sub(r'[^\w\s]', '', clean_text)[:100].strip()
                     if search_text:
                         try:
-                            # 1. Try exact phrase match (most accurate)
                             exact_search = DDGS().text(f'"{search_text}"', max_results=1)
                             if exact_search and exact_search[0].get('href'):
                                 domain = exact_search[0]['href'].split('/')[2].replace('www.', '')
                                 re_origin = domain
                             else:
-                                # 2. Fallback to keyword search if exact match fails
                                 keyword_search = DDGS().text(search_text, max_results=1)
                                 if keyword_search and keyword_search[0].get('href'):
                                     domain = keyword_search[0]['href'].split('/')[2].replace('www.', '')
@@ -244,16 +264,15 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
             st.divider()
             st.subheader("🏆 Final Verdict")
             
-            if media_api_failed and (is_video or is_image):
-                st.warning("⚠️ **AI Media Detection API timed out.**")
-                if not clean_text: st.stop()
+            if media_api_failed and (is_video or is_image) and not clean_text:
+                st.warning("⚠️ **AI Media Detection API timed out.** Cannot verify video authenticity right now. Please try again.")
+                st.stop()
 
             if final_is_fake:
                 st.error("🚨 **OVERALL VERDICT: FAKE / MISLEADING / AI-GENERATED**")
                 if llm_reason: st.write(f"**Reason:** {llm_reason}")
                 if is_ai_text: st.warning("⚠️ **Warning:** Text flagged as AI-generated.")
                 if ai_media_verdict: st.warning("⚠️ **Warning:** Media flagged as Deepfake.")
-                st.markdown("### 📢 Report to Authorities:\n* 🚔 [Cyber Crime Portal](https://cybercrime.gov.in/) | 📰 [PIB Fact Check](https://pib.gov.in/)")
             else:
                 st.success("✅ **OVERALL VERDICT: REAL / AUTHENTIC**")
                 if llm_reason: st.write(f"**Reason:** {llm_reason}")
@@ -270,7 +289,6 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
                 st.write("---")
                 st.subheader("🕵️ Reverse Engineering (Source Tracing)")
                 
-                # Color code the trust level for better UI
                 if "High" in re_trust:
                     st.success(f"**Traced Origin:** `{re_origin}` | **Trust Level:** {re_trust}")
                 elif "Low" in re_trust or "Suspicious" in re_origin:
@@ -281,3 +299,13 @@ if st.button("Analyze Now", type="primary", use_container_width=True):
                 col1, col2 = st.columns(2)
                 col1.metric("AI Text Detection", "AI-Generated" if is_ai_text else "Human-Written")
                 col2.metric("Baseline Model", f"FAKE {base_conf:.1f}%" if base_pred == 1 else f"REAL {base_conf:.1f}%")
+
+# --- PERMANENT REPORTING SECTION (Outside the if analyze_clicked block so it always shows) ---
+st.write("---")
+st.subheader("📢 Report Misinformation to Authorities")
+st.markdown("""
+If you suspect any content you checked is malicious, defamatory, or spreading panic, please report it immediately. You can take a screenshot and submit it to the official Indian Government portals:
+*   🚔 **[National Cyber Crime Reporting Portal](https://cybercrime.gov.in/)** (Select 'Report Cyber Crime' -> 'Fake News')
+*   📰 **[PIB Fact Check](https://pib.gov.in/factcheck.aspx)** (WhatsApp: +91-8799717971)
+*   🐦 **Twitter/X:** Tag `@Cyberdost` (Ministry of Home Affairs)
+""")
