@@ -1,46 +1,30 @@
 import streamlit as st
 import joblib
-import torch
-import gdown
-import zipfile
 import os
 import json
 from openai import OpenAI
-from transformers import pipeline
+from huggingface_hub import InferenceClient
 
 # --- Page Config ---
 st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wide")
 
 st.title("📰 Fake News Detector & Cyber Threat Analyzer")
 st.markdown("""
-This application uses **three** AI models to detect if a news article is **Real** or **Fake**. 
-If the news is deemed fake, it provides the **reasoning** and **actionable steps** to report it to the Indian Cyber Crime authorities.
+This application uses **three** models to detect if a news article is **Real** or **Fake**. 
+*   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
+*   **Deep Learning:** Modern DeBERTa-v3 Transformer (API)
+*   **OpenRouter (LLM):** Modern LLM (Real-world knowledge)
 """)
 
-# --- Load Models ---
+# --- Load Local Baseline Model ---
 @st.cache_resource
 def load_baseline():
     tfidf = joblib.load("tfidf.pkl")
     model = joblib.load("logreg.pkl")
     return tfidf, model
 
-@st.cache_resource
-def load_bert():
-    file_id = "1cWQlcmudcCov59qN6u8CiIEOGjMYI45Y" 
-    download_path = "bert_model.zip"
-    
-    if not os.path.exists("./final"):
-        url = f'https://drive.google.com/uc?export=download&confirm=t&id={file_id}'
-        gdown.download(url, download_path, quiet=False)
-        with zipfile.ZipFile(download_path, 'r') as zip_ref:
-            zip_ref.extractall(".")
-            
-    nlp = pipeline("text-classification", model="./final", tokenizer="./final", device=-1) 
-    return nlp
-
 try:
     tfidf, base_model = load_baseline()
-    bert_model = load_bert()
     models_loaded = True
 except Exception as e:
     st.error(f"Error loading local models. Details: {e}")
@@ -60,11 +44,24 @@ if st.button("Analyze Article", type="primary"):
             base_pred = base_model.predict(text_vec)[0]
             base_proba = base_model.predict_proba(text_vec)[0]
             base_conf = base_proba[base_pred] * 100
-            
-            # 2. BERT Prediction
-            bert_result = bert_model(text_input[:2000])[0] 
-            bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
-            bert_conf = bert_result['score'] * 100
+
+            # 2. Modern Deep Learning Prediction (Hugging Face API)
+            bert_is_fake = None
+            bert_conf = 0
+            try:
+                hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
+                # Using a modern zero-shot classification model for logic-based detection
+                result = hf_client.zero_shot_classification(
+                    text_input[:1000], # Truncate for speed
+                    candidate_labels=["fake news", "real news"],
+                    model="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+                )
+                # The API returns a list of dicts sorted by score
+                top_prediction = result[0]
+                bert_is_fake = True if top_prediction['label'] == "fake news" else False
+                bert_conf = top_prediction['score'] * 100
+            except Exception as e:
+                st.error(f"HuggingFace API Error: {e}")
 
             # 3. OpenRouter Prediction (JSON Mode for Reasoning & Action)
             llm_is_fake = None
@@ -78,7 +75,6 @@ if st.button("Analyze Article", type="primary"):
                     api_key=st.secrets["OPENROUTER_API_KEY"],
                 )
                 
-                # We prompt the LLM to return structured JSON
                 prompt = f"""
                 Analyze the following news article. 
                 Return ONLY a valid JSON object with exactly these three keys:
@@ -92,17 +88,14 @@ if st.button("Analyze Article", type="primary"):
                 response = client.chat.completions.create(
                     model="nvidia/nemotron-3.5-lightning:free", 
                     messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"} # Force JSON output if supported
+                    response_format={"type": "json_object"}
                 )
                 
-                # Parse the JSON response
                 raw_response = response.choices[0].message.content.strip()
-                # Clean up markdown formatting if the LLM adds it
                 if raw_response.startswith("```json"):
                     raw_response = raw_response.replace("```json", "").replace("```", "").strip()
                 
                 parsed_json = json.loads(raw_response)
-                
                 verdict_str = parsed_json.get("verdict", "").upper()
                 llm_is_fake = True if "FAKE" in verdict_str else False
                 llm_reason = parsed_json.get("reason", "No reason provided.")
@@ -110,14 +103,11 @@ if st.button("Analyze Article", type="primary"):
                 
             except Exception as e:
                 llm_error = str(e)
-                # Fallback simple check if JSON parsing fails
-                if 'raw_response' in locals() and "FAKE" in raw_response.upper():
-                     llm_is_fake = True
 
             # --- ENSEMBLE VOTING ---
             votes_for_fake = 0
             if base_pred == 1: votes_for_fake += 1
-            if bert_pred == 1: votes_for_fake += 1
+            if bert_is_fake is True: votes_for_fake += 1
             if llm_is_fake is True: votes_for_fake += 1
 
             st.divider()
@@ -126,14 +116,9 @@ if st.button("Analyze Article", type="primary"):
             st.subheader("🏆 Final Verdict")
             if votes_for_fake >= 2:
                 st.error("🚨 **OVERALL VERDICT: FAKE NEWS** (Majority Vote)")
-                
-                # Display Reason from LLM
                 st.info(f"**🧠 Reason:** {llm_reason}")
-                
-                # Display Action & Security Calls
                 st.warning(f"**🛡️ Recommended Action:** {llm_action}")
                 
-                # Indian Government Reporting Links
                 st.markdown("""
                 ### 📢 Report This Fake News to Authorities:
                 Please take a screenshot of this article and report it immediately to the official Indian Government portals:
@@ -141,7 +126,6 @@ if st.button("Analyze Article", type="primary"):
                 *   📰 **[PIB Fact Check](https://pib.gov.in/factcheck.aspx)** (WhatsApp: +91-8799717971)
                 *   🐦 **Twitter/X:** Tag `@Cyberdost` (Ministry of Home Affairs)
                 """)
-                
             else:
                 st.success("✅ **OVERALL VERDICT: REAL NEWS** (Majority Vote)")
                 st.info(f"**🧠 Reason:** {llm_reason}")
@@ -160,11 +144,13 @@ if st.button("Analyze Article", type="primary"):
                     st.success(f"✅ REAL\nConfidence: {base_conf:.2f}%")
 
             with col2:
-                st.markdown("**Deep Learning (BERT)**")
-                if bert_pred == 1:
+                st.markdown("**Deep Learning (Modern API)**")
+                if bert_is_fake is True:
                     st.error(f"🚨 FAKE\nConfidence: {bert_conf:.2f}%")
-                else:
+                elif bert_is_fake is False:
                     st.success(f"✅ REAL\nConfidence: {bert_conf:.2f}%")
+                else:
+                    st.warning("API Error")
 
             with col3:
                 st.markdown("**OpenRouter (LLM)**")
@@ -172,5 +158,5 @@ if st.button("Analyze Article", type="primary"):
                     st.error("🚨 FAKE\n(Gave reasoning)")
                 elif llm_is_fake is False:
                     st.success("✅ REAL\n(Gave reasoning)")
-                elif llm_error:
-                    st.error(f"API Error: {llm_error}")
+                else:
+                    st.error("API Error")
