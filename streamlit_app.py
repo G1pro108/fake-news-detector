@@ -5,6 +5,7 @@ import torch
 import gdown
 import zipfile
 import os
+import google.generativeai as genai
 from transformers import pipeline
 
 # --- Page Config ---
@@ -12,35 +13,31 @@ st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wi
 
 st.title("📰 Fake News Detector")
 st.markdown("""
-This application uses two Machine Learning models to detect if a news article is **Real** or **Fake**.
-*   **Baseline:** TF-IDF + Logistic Regression (Fast, traditional ML)
+This application uses **three** models to detect if a news article is **Real** or **Fake**.
+*   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
 *   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
+*   **Gemini AI:** Google's Large Language Model (Real-world knowledge up to 2025)
 """)
 
-# --- Load Models (Cached so it only loads once) ---
+# --- Load Models ---
 @st.cache_resource
 def load_baseline():
-    # Since the files are in the root directory on GitHub:
+    # Assuming files are in the root directory
     tfidf = joblib.load("tfidf.pkl")
     model = joblib.load("logreg.pkl")
     return tfidf, model
+
 @st.cache_resource
 def load_bert():
-    # Updated with your NEW Google Drive File ID
     file_id = "1cWQlcmudcCov59qN6u8CiIEOGjMYI45Y" 
     download_path = "bert_model.zip"
     
-    # Check if we already downloaded and extracted it
     if not os.path.exists("./final"):
-        # ⚠️ Notice the new URL format below with export=download&confirm=t
         url = f'https://drive.google.com/uc?export=download&confirm=t&id={file_id}'
         gdown.download(url, download_path, quiet=False)
-        
-        # Unzip the model
         with zipfile.ZipFile(download_path, 'r') as zip_ref:
             zip_ref.extractall(".")
             
-    # Load the pipeline from the extracted folder
     nlp = pipeline("text-classification", model="./final", tokenizer="./final", device=-1) 
     return nlp
 
@@ -49,17 +46,20 @@ try:
     bert_model = load_bert()
     models_loaded = True
 except Exception as e:
-    st.error(f"Error loading models. Details: {e}")
+    st.error(f"Error loading local models. Details: {e}")
     models_loaded = False
 
 # --- UI Layout ---
-text_input = st.text_area("Paste the news article here:", height=250, placeholder="Enter title and body text...")
+# You need to replace this with your actual API key
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+
+text_input = st.text_area("Paste the news article here:", height=200, placeholder="Enter title and body text...")
 
 if st.button("Analyze Article", type="primary"):
     if not text_input.strip():
         st.warning("Please enter some text to analyze.")
     elif models_loaded:
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing with all 3 models..."):
             
             # 1. Baseline Prediction
             text_vec = tfidf.transform([text_input])
@@ -72,20 +72,40 @@ if st.button("Analyze Article", type="primary"):
             bert_pred = 1 if bert_result['label'] == 'LABEL_1' else 0
             bert_conf = bert_result['score'] * 100
 
+            # 3. Gemini API Prediction
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                prompt = f"Analyze the following news article. Is it REAL news or FAKE news? Reply strictly with only the word 'REAL' or 'FAKE' and nothing else. Article: {text_input[:5000]}"
+                response = gemini_model.generate_content(prompt)
+                gemini_pred = response.text.strip().upper()
+                gemini_is_fake = True if "FAKE" in gemini_pred else False
+            except Exception as e:
+                gemini_is_fake = None
+
             # --- Display Results ---
             st.divider()
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.subheader("Traditional ML (Baseline)")
+                st.subheader("Baseline (TF-IDF)")
                 if base_pred == 1:
-                    st.error(f"🚨 **FAKE NEWS** (Confidence: {base_conf:.2f}%)")
+                    st.error(f"🚨 **FAKE NEWS**\nConfidence: {base_conf:.2f}%")
                 else:
-                    st.success(f"✅ **REAL NEWS** (Confidence: {base_conf:.2f}%)")
+                    st.success(f"✅ **REAL NEWS**\nConfidence: {base_conf:.2f}%")
 
             with col2:
-                st.subheader("Deep Learning (DistilBERT)")
+                st.subheader("Deep Learning (BERT)")
                 if bert_pred == 1:
-                    st.error(f"🚨 **FAKE NEWS** (Confidence: {bert_conf:.2f}%)")
+                    st.error(f"🚨 **FAKE NEWS**\nConfidence: {bert_conf:.2f}%")
                 else:
-                    st.success(f"✅ **REAL NEWS** (Confidence: {bert_conf:.2f}%)")
+                    st.success(f"✅ **REAL NEWS**\nConfidence: {bert_conf:.2f}%")
+
+            with col3:
+                st.subheader("Google Gemini AI")
+                if gemini_is_fake is True:
+                    st.error(f"🚨 **FAKE NEWS**\n(Based on world knowledge)")
+                elif gemini_is_fake is False:
+                    st.success(f"✅ **REAL NEWS**\n(Based on world knowledge)")
+                else:
+                    st.warning("API Key missing or invalid.")
