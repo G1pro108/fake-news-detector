@@ -13,9 +13,9 @@ st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wi
 st.title("📰 Fake News Detector")
 st.markdown("""
 This application uses **three** models to detect if a news article is **Real** or **Fake**.
-*   **Baseline:** TF-IDF + Logistic Regression (Fast, keyword-based)
-*   **BERT:** Fine-tuned DistilBERT (Deep Learning, context-aware)
-*   **OpenRouter (LLM):** Modern LLM (Real-world knowledge)
+*   **Baseline:** TF-IDF + Logistic Regression
+*   **BERT:** Fine-tuned DistilBERT (Note: Trained on 2016 US politics, may struggle with modern/international news)
+*   **OpenRouter (LLM):** Modern LLM with real-world knowledge
 """)
 
 # --- Load Models ---
@@ -86,8 +86,25 @@ if st.button("Analyze Article", type="primary"):
                 llm_is_fake = None
                 llm_error = str(e)
 
-            # --- Display Results ---
+            # --- ENSEMBLE VOTING (NEW) ---
+            # We have 3 models. If at least 2 say FAKE, final is FAKE.
+            votes_for_fake = 0
+            if base_pred == 1: votes_for_fake += 1
+            if bert_pred == 1: votes_for_fake += 1
+            if llm_is_fake is True: votes_for_fake += 1
+
             st.divider()
+            
+            # Display the Overall Verdict
+            st.subheader("🏆 Final Ensemble Verdict")
+            if votes_for_fake >= 2:
+                st.error("🚨 **OVERALL VERDICT: FAKE NEWS** (Majority Vote)")
+            else:
+                st.success("✅ **OVERALL VERDICT: REAL NEWS** (Majority Vote)")
+            
+            st.write("---")
+            
+            # Display Individual Model Results
             col1, col2, col3 = st.columns(3)
             
             with col1:
