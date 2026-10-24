@@ -2,6 +2,7 @@ import streamlit as st
 import joblib
 import os
 import json
+import re
 from openai import OpenAI
 from huggingface_hub import InferenceClient
 from duckduckgo_search import DDGS
@@ -11,11 +12,7 @@ st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="wi
 
 st.title("📰 Fake News Detector & Threat Analyzer")
 st.markdown("""
-This application uses **3 AI Models + RAG + Reverse Engineering** to detect if a news article is **Real** or **Fake**. 
-*   **Baseline:** TF-IDF
-*   **Deep Learning:** DeBERTa-v3
-*   **OpenRouter (LLM + RAG):** Live web fact-check
-*   **Reverse Engineering:** Traces the origin of the text online!
+This app uses **3 AI Models + RAG + Reverse Engineering** to detect if a news article is **Real** or **Fake**.
 """)
 
 # --- Load Local Baseline Model ---
@@ -39,70 +36,81 @@ if st.button("Analyze Article", type="primary"):
     if not text_input.strip():
         st.warning("Please enter some text to analyze.")
     elif models_loaded:
-        with st.spinner("Analyzing with AI, searching live web, and reverse-engineering source..."):
+        with st.spinner("Analyzing..."):
+            
+            # --- 0. CLEAN THE TEXT ---
+            # Remove URLs and "Read more at" for cleaner analysis
+            clean_text = re.sub(r'http\S+', '', text_input)
+            clean_text = clean_text.replace('Read more at:', '').replace('..', '.').strip()
             
             # 1. Baseline Prediction
-            text_vec = tfidf.transform([text_input])
+            text_vec = tfidf.transform([clean_text])
             base_pred = base_model.predict(text_vec)[0]
             base_proba = base_model.predict_proba(text_vec)[0]
             base_conf = base_proba[base_pred] * 100
 
-            # 2. Modern Deep Learning Prediction (Hugging Face API)
+            # 2. Modern Deep Learning (Using a lighter, reliable model)
             bert_is_fake = None
             bert_conf = 0
             try:
                 hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
                 result = hf_client.zero_shot_classification(
-                    text_input[:1000],
+                    clean_text[:1000],
                     candidate_labels=["fake news", "real news"],
-                    model="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+                    model="cross-encoder/nli-distilroberta-base" # Lighter model to prevent timeouts
                 )
                 top_prediction = result[0]
                 bert_is_fake = True if top_prediction['label'] == "fake news" else False
                 bert_conf = top_prediction['score'] * 100
             except Exception as e:
-                pass
+                st.warning(f"Deep Learning API bypassed due to timeout.")
 
-            # --- REVERSE ENGINEERING: TRACE THE SOURCE ---
+            # --- 3. REVERSE ENGINEERING (RAE) ---
             re_origin = "Unknown"
-            re_trust = "Unknown"
-            try:
-                # Extract a unique chunk of text to search
-                search_query = text_input[:100].replace('"', '')
-                # Search for an EXACT phrase match
-                exact_search = DDGS().text(f'"{search_query}"', max_results=2)
+            re_trust = "Medium"
+            
+            # Check if user pasted a URL
+            url_match = re.search(r'https?://[^\s]+', text_input)
+            if url_match:
+                domain = url_match.group(0).split('/')[2].replace('www.', '')
+                re_origin = f"URL Provided: {domain}"
                 
-                if exact_search:
-                    # If we find a result, we trace the domain
-                    first_url = exact_search[0]['href']
-                    domain = first_url.split('/')[2].replace('www.', '')
-                    re_origin = domain
-                    
-                    # Check if it's a known credible source
-                    credible_domains = ['reuters.com', 'bbc.com', 'nytimes.com', 'thehindu.com', 'indiatoday.in', 'apnews.com']
-                    satire_domains = ['theonion.com', 'fakingnews.com', 'worldnewsdailyreport.com', 'thefauxy.com']
-                    
-                    if any(cred in domain for cred in credible_domains):
-                        re_trust = "High (Credible Source)"
-                    elif any(sat in domain for sat in satire_domains):
-                        re_trust = "Low (Satire/Fake Site)"
-                    else:
-                        re_trust = "Medium (Unknown Source)"
+                # Check against trusted Indian & Global sources
+                trusted_sources = ['timesofindia.indiatimes.com', 'thehindu.com', 'indianexpress.com', 
+                                   'ndtv.com', 'hindustantimes.com', 'reuters.com', 'bbc.com', 
+                                   'pib.gov.in', 'apnews.com']
+                
+                if any(trusted in domain for trusted in trusted_sources):
+                    re_trust = "High (Credible Source)"
                 else:
-                    re_origin = "No exact match found online (Highly Suspicious)"
-                    re_trust = "Low (Unverified)"
-            except Exception as e:
-                re_origin = "Search failed."
-                re_trust = "Unknown"
+                    re_trust = "Low (Unknown Source)"
+            else:
+                # If no URL, search the web for the exact text
+                try:
+                    search_query = clean_text[:80].replace('"', '')
+                    exact_search = DDGS().text(f'"{search_query}"', max_results=1)
+                    if exact_search:
+                        domain = exact_search[0]['href'].split('/')[2].replace('www.', '')
+                        re_origin = domain
+                        trusted_sources = ['timesofindia.indiatimes.com', 'thehindu.com', 'indianexpress.com', 'ndtv.com', 'hindustantimes.com', 'reuters.com', 'bbc.com']
+                        if any(trusted in domain for trusted in trusted_sources):
+                            re_trust = "High (Credible Source)"
+                        else:
+                            re_trust = "Medium (Unknown Source)"
+                    else:
+                        re_origin = "No exact match found online"
+                        re_trust = "Low (Unverified)"
+                except:
+                    pass
 
-            # 3. OpenRouter Prediction (RAG + LLM)
+            # 4. OpenRouter Prediction (RAG + LLM)
             llm_is_fake = None
             llm_reason = "No explanation provided."
             llm_action = "No action needed."
             
             try:
                 # RAG Step
-                search_results = DDGS().text(text_input[:150], max_results=3)
+                search_results = DDGS().text(clean_text[:150], max_results=3)
                 context_text = "\n".join([f"- {r['title']}: {r['body']}" for r in search_results])
                 
                 client = OpenAI(
@@ -110,17 +118,20 @@ if st.button("Analyze Article", type="primary"):
                     api_key=st.secrets["OPENROUTER_API_KEY"],
                 )
                 
+                # We add the Reverse Engineering findings directly into the prompt!
                 prompt = f"""
                 Analyze the following news article based on this live web context.
-                Context: {context_text}
-                Also note: Reverse engineering found the original source to be '{re_origin}' which has a trust level of '{re_trust}'.
+                Web Context: {context_text}
+                
+                IMPORTANT: Reverse engineering traced the original source to: '{re_origin}' with a Trust Level of '{re_trust}'.
+                If the Trust Level is 'High', you should strongly lean towards REAL, unless the text is obviously satire.
                 
                 Return ONLY a valid JSON object with exactly these three keys:
                 "verdict": "REAL" or "FAKE",
                 "reason": "A short 1-2 sentence explanation.",
                 "action": "If FAKE, mention reporting to cybercrime.gov.in. If REAL, say 'No action needed'."
                 
-                Article: {text_input[:4000]}
+                Article: {clean_text[:4000]}
                 """
                 
                 response = client.chat.completions.create(
@@ -139,17 +150,18 @@ if st.button("Analyze Article", type="primary"):
                 llm_action = parsed_json.get("action", "No action provided.")
                 
             except Exception as e:
-                pass
+                st.error(f"LLM API Error: {e}")
 
-            # --- ENSEMBLE VOTING ---
+            # --- ENSEMBLE VOTING (Rule-Based) ---
+            # If Reverse Engineering finds a "High Trust" source, the final verdict is REAL.
+            # Otherwise, rely on the LLM's verdict.
             final_is_fake = False
-            if llm_is_fake is not None:
-                if llm_is_fake is False:
-                    final_is_fake = False
-                else:
-                    if base_pred == 1 or bert_is_fake is True:
-                        final_is_fake = True
             
+            if "High" in re_trust:
+                final_is_fake = False # Trusted source overrides everything
+            else:
+                final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
+
             st.divider()
             
             # --- FINAL VERDICT ---
@@ -172,7 +184,7 @@ if st.button("Analyze Article", type="primary"):
             
             # --- REVERSE ENGINEERING RESULTS ---
             st.subheader("🕵️ Reverse Engineering (Source Tracing)")
-            st.markdown(f"**Original Source Traced:** `{re_origin}`")
+            st.markdown(f"**Traced Origin:** `{re_origin}`")
             if "High" in re_trust:
                 st.success(f"**Trust Level:** {re_trust}")
             elif "Low" in re_trust:
@@ -195,7 +207,7 @@ if st.button("Analyze Article", type="primary"):
                 st.markdown("**Deep Learning (DeBERTa)**")
                 if bert_is_fake is True: st.error(f"🚨 FAKE ({bert_conf:.1f}%)")
                 elif bert_is_fake is False: st.success(f"✅ REAL ({bert_conf:.1f}%)")
-                else: st.warning("API Error")
+                else: st.warning("API Timeout")
 
             with col3:
                 st.markdown("**OpenRouter (LLM)**")
