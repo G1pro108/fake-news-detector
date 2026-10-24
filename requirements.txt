@@ -22,3 +22,4 @@ openai
 huggingface_hub
 duckduckgo_search
 pytesseract
+opencv-python-headless
