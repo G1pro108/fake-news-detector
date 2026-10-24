@@ -20,3 +20,4 @@ streamlit>=1.36
 gdown
 openai
 huggingface_hub
+duckduckgo_search
