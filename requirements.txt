@@ -9,5 +9,7 @@ pytesseract
 opencv-python-headless
 numpy
 c2pa-python
+concurrent.futures
 duckduckgo_search
 openai
+deep-translator
