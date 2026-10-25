@@ -130,7 +130,7 @@ if analyze_clicked:
                 else:
                     media_verdict = False
                     st.success("✅ **Local Vision: Image appears real.**")
-            except: st.warning("Image vision analysis failed.")
+            except Exception as e: st.warning(f"Image vision analysis failed: {e}")
         elif filename.endswith(('.mp4', '.mov')):
             is_video = True
             with st.spinner("Extracting video frames..."):
@@ -229,41 +229,62 @@ if analyze_clicked:
             progress_bar.empty()
 
             # ==========================================
-            # PHASE 4: THE 3-JUDGE PANEL (FREE APIs)
+            # PHASE 4: THE 3-JUDGE PANEL (FIXED)
             # ==========================================
             st.subheader("🏛️ Phase 3: Consulting the 3-Judge Panel...")
             judge_votes = []
             text_for_judges = translated_text[:1500]
 
-            # Judge 1: Google Gemini
+            # Judge 1: Google Gemini (Updated Model & Error Display)
             with st.spinner("Judge 1 (Google Gemini) is analyzing..."):
                 try:
-                    gemini_client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=st.secrets["GEMINI_API_KEY"])
-                    res = gemini_client.chat.completions.create(model="gemini-1.5-flash", messages=[{"role": "user", "content": f"Is this text real or fake? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}])
+                    gemini_client = OpenAI(
+                        base_url="https://generativelanguage.googleapis.com/v1beta/openai/", 
+                        api_key=st.secrets["GEMINI_API_KEY"]
+                    )
+                    res = gemini_client.chat.completions.create(
+                        model="gemini-2.0-flash", # ✅ Updated model
+                        messages=[{"role": "user", "content": f"Is this text real or fake? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}]
+                    )
                     verdict = res.choices[0].message.content.strip().upper()
                     if "FAKE" in verdict: judge_votes.append(-1); st.error("Judge 1 (Gemini): Voted FAKE")
                     elif "REAL" in verdict: judge_votes.append(1); st.success("Judge 1 (Gemini): Voted REAL")
-                except: st.warning("Judge 1 (Gemini) hit API limit or is offline.")
+                except Exception as e: 
+                    st.warning(f"Judge 1 (Gemini) Error: {e}") # ✅ Shows exact error
 
-            # Judge 2: OpenRouter (DeepSeek)
-            with st.spinner("Judge 2 (DeepSeek) is analyzing..."):
+            # Judge 2: OpenRouter (Updated Free Model & Error Display)
+            with st.spinner("Judge 2 (OpenRouter) is analyzing..."):
                 try:
-                    or_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.secrets["OPENROUTER_API_KEY"])
-                    res = or_client.chat.completions.create(model="deepseek/deepseek-r1:free", messages=[{"role": "user", "content": f"Is this text real or fake? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}])
+                    or_client = OpenAI(
+                        base_url="https://openrouter.ai/api/v1", 
+                        api_key=st.secrets["OPENROUTER_API_KEY"]
+                    )
+                    res = or_client.chat.completions.create(
+                        model="meta-llama/llama-3.1-8b-instruct:free", # ✅ Highly reliable free model
+                        messages=[{"role": "user", "content": f"Is this text real or fake? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}]
+                    )
                     verdict = res.choices[0].message.content.strip().upper()
-                    if "FAKE" in verdict: judge_votes.append(-1); st.error("Judge 2 (DeepSeek): Voted FAKE")
-                    elif "REAL" in verdict: judge_votes.append(1); st.success("Judge 2 (DeepSeek): Voted REAL")
-                except: st.warning("Judge 2 (DeepSeek) hit API limit or is offline.")
+                    if "FAKE" in verdict: judge_votes.append(-1); st.error("Judge 2 (OpenRouter): Voted FAKE")
+                    elif "REAL" in verdict: judge_votes.append(1); st.success("Judge 2 (OpenRouter): Voted REAL")
+                except Exception as e: 
+                    st.warning(f"Judge 2 (OpenRouter) Error: {e}") # ✅ Shows exact error
 
-            # Judge 3: Sarvam AI
+            # Judge 3: Sarvam AI (Error Display)
             with st.spinner("Judge 3 (Sarvam AI) is analyzing..."):
                 try:
-                    sarvam_client = OpenAI(base_url="https://api.sarvam.ai/v1", api_key=st.secrets["SARVAM_API_KEY"])
-                    res = sarvam_client.chat.completions.create(model="sarvam-105b", messages=[{"role": "user", "content": f"Analyze for Indian context. Is this REAL or FAKE? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}])
+                    sarvam_client = OpenAI(
+                        base_url="https://api.sarvam.ai/v1", 
+                        api_key=st.secrets["SARVAM_API_KEY"]
+                    )
+                    res = sarvam_client.chat.completions.create(
+                        model="sarvam-105b", 
+                        messages=[{"role": "user", "content": f"Analyze for Indian context. Is this REAL or FAKE? Return ONLY 'REAL' or 'FAKE'. Text: {text_for_judges}"}]
+                    )
                     verdict = res.choices[0].message.content.strip().upper()
                     if "FAKE" in verdict: judge_votes.append(-1); st.error("Judge 3 (Sarvam): Voted FAKE")
                     elif "REAL" in verdict: judge_votes.append(1); st.success("Judge 3 (Sarvam): Voted REAL")
-                except: st.warning("Judge 3 (Sarvam) hit API limit or is offline.")
+                except Exception as e: 
+                    st.warning(f"Judge 3 (Sarvam) Error: {e}") # ✅ Shows exact error
 
             # ==========================================
             # PHASE 5: FINAL CONSENSUS (With Swarm Fallback)
