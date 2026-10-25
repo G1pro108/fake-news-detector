@@ -11,11 +11,8 @@ import pytesseract
 import cv2
 import numpy as np
 import tempfile
-import time
 import c2pa
-import base64
-from io import BytesIO
-from groq import Groq
+from transformers import pipeline
 
 # --- Page Config ---
 st.set_page_config(page_title="Multimodal Fake News & Deepfake Detector", page_icon="🛡️", layout="wide")
@@ -59,18 +56,24 @@ def analyze_c2pa_metadata(uploaded_file):
     except Exception:
         return {"status": "No Manifest", "summary": "Format unsupported or metadata stripped. (Normal for most web videos/images)."}
 
-# --- LOAD BASELINE MODEL ---
+# --- LOAD MODELS ---
 @st.cache_resource
 def load_baseline():
     tfidf = joblib.load("tfidf.pkl")
     model = joblib.load("logreg.pkl")
     return tfidf, model
 
+@st.cache_resource
+def load_local_vision_model():
+    # Downloads once, then runs locally on CPU for free
+    return pipeline("image-classification", model="dima806/deepfake_vs_real_image_detection", device=-1)
+
 try:
     tfidf, base_model = load_baseline()
+    local_vision = load_local_vision_model()
     models_loaded = True
 except Exception as e:
-    st.error(f"Error loading local models. Details: {e}")
+    st.error(f"Error loading local models. Please ensure model files are present. Details: {e}")
     models_loaded = False
 
 # --- HELPER: EXTRACT FRAMES FROM VIDEO ---
@@ -139,47 +142,18 @@ if analyze_clicked:
             if input_text: st.info(f"📸 **Text extracted from image:**\n\n{input_text[:200]}...")
             
             try:
-                # FREE GROQ LLAMA 3.2 VISION
-                groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-                buffered = BytesIO()
-                img.save(buffered, format="JPEG")
-                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                
-                vision_prompt = "Analyze this image. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
-                
-                response = groq_client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": vision_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }],
-                    temperature=0.0
-                )
-                verdict = response.choices[0].message.content.strip().upper()
-                
-                if "AI-GENERATED" in verdict or "FAKE" in verdict:
+                # 100% LOCAL INFERENCE (No API, No Timeouts)
+                results = local_vision(img)
+                top_label = results[0]['label'].lower()
+                if 'fake' in top_label or 'artificial' in top_label:
                     ai_media_verdict = True
-                    st.error("🚨 **Image is AI-Generated/Deepfake!**")
+                    st.error(f"🚨 **Image is AI-Generated/Deepfake!** (Confidence: {results[0]['score']*100:.1f}%)")
                 else:
                     ai_media_verdict = False
                     st.success("✅ **Image appears to be real.**")
-                    
             except Exception as e:
-                st.warning(f"Groq API unavailable, switching to Hugging Face backup... ({e})")
-                try:
-                    hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                    img_res = hf_client.image_classification(img, model="dima806/deepfake_vs_real_image_detection")
-                    if img_res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']:
-                        ai_media_verdict = True
-                        st.error("🚨 **Image is AI-Generated (Hugging Face Backup)**")
-                    else:
-                        ai_media_verdict = False
-                        st.success("✅ **Image appears real (Hugging Face Backup).**")
-                except Exception:
-                    media_api_failed = True
+                media_api_failed = True
+                st.error(f"Local Image Analysis Error: {e}")
                 
         elif filename.endswith(('.mp4', '.mov')):
             is_video = True
@@ -189,60 +163,24 @@ if analyze_clicked:
                     st.error("Could not extract frames.")
                 else:
                     st.info(f"🎞️ **Video processed. Extracting {len(frames)} frames.**")
-                    
+                    ai_votes = 0
                     try:
-                        # FREE GROQ LLAMA 3.2 VISION FOR VIDEO
-                        groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-                        buffered = BytesIO()
-                        frames[0].save(buffered, format="JPEG")
-                        base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                        # 100% LOCAL INFERENCE
+                        for frame in frames:
+                            results = local_vision(frame)
+                            top_label = results[0]['label'].lower()
+                            if 'fake' in top_label or 'artificial' in top_label:
+                                ai_votes += 1
                         
-                        vision_prompt = "Analyze this image frame from a video. Is it likely AI-generated/deepfake, or a real photograph? Reply strictly with only the word 'AI-GENERATED' or 'REAL'."
-                        
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.2-11b-vision-preview",
-                            messages=[{
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": vision_prompt},
-                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                                ]
-                            }],
-                            temperature=0.0
-                        )
-                        verdict = response.choices[0].message.content.strip().upper()
-                        
-                        if "AI-GENERATED" in verdict or "FAKE" in verdict:
+                        if ai_votes >= 2:
                             ai_media_verdict = True
-                            st.error("🚨 **Video is likely AI-Generated (Deepfake)!**")
+                            st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
                         else:
                             ai_media_verdict = False
-                            st.success("✅ **Video appears to be real.**")
-                            
+                            st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
                     except Exception as e:
-                        st.warning(f"Groq Vision unavailable, trying Hugging Face backup... ({e})")
-                        hf_success = False
-                        ai_votes = 0
-                        try:
-                            hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
-                            for frame in frames:
-                                res = hf_client.image_classification(frame, model="dima806/deepfake_vs_real_image_detection")
-                                if res[0]['label'].lower() in ['deepfake', 'fake', 'artificial']: 
-                                    ai_votes += 1
-                            hf_success = True
-                        except Exception:
-                            hf_success = False
-
-                        if hf_success:
-                            if ai_votes >= 2:
-                                ai_media_verdict = True
-                                st.error(f"🚨 **Video is likely AI-Generated!** ({ai_votes}/{len(frames)} frames flagged).")
-                            else:
-                                ai_media_verdict = False
-                                st.success(f"✅ **Video appears real.** ({ai_votes}/{len(frames)} frames flagged).")
-                        else:
-                            media_api_failed = True
-                            st.warning("⚠️ **All free Vision APIs are currently offline.** Please try again later.")
+                        media_api_failed = True
+                        st.error(f"Local Video Analysis Error: {e}")
                         
     elif text_input.strip():
         input_text = text_input.strip()
@@ -263,7 +201,7 @@ if analyze_clicked:
             clean_text = re.sub(r'http\S+', '', input_text).replace('Read more at:', '').strip()
             
             if clean_text:
-                # A. AI TEXT DETECTION
+                # A. AI TEXT DETECTION (Hugging Face API - Lightweight)
                 try:
                     hf_client = InferenceClient(token=st.secrets["HF_TOKEN"])
                     ai_text_res = hf_client.text_classification(clean_text[:1000], model="openai-community/roberta-base-openai-detector")
@@ -325,11 +263,20 @@ if analyze_clicked:
                     llm_reason = parsed_json.get("reason", "")
                 except: pass
 
-            # --- FINAL ENSEMBLE VERDICT ---
+            # --- FINAL ENSEMBLE VERDICT (WITH CONFIDENCE GUARDRAIL) ---
             final_is_fake = False
             
             if clean_text:
-                final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
+                # Confidence Guardrail Logic: Prevents false positives on out-of-distribution text
+                if base_conf < 60.0 and llm_is_fake is None:
+                    st.warning("⚠️ **Low Confidence Baseline Prediction.** The model is unsure. Relying on Reverse Engineering and Source Tracing.")
+                    if "High" in re_trust:
+                        final_is_fake = False
+                    else:
+                        final_is_fake = (base_pred == 1)
+                else:
+                    final_is_fake = llm_is_fake if llm_is_fake is not None else (base_pred == 1)
+                
                 if is_ai_text: final_is_fake = True 
                 if "High" in re_trust: final_is_fake = False 
             
@@ -340,7 +287,7 @@ if analyze_clicked:
             st.subheader("🏆 Final Verdict")
             
             if media_api_failed and (is_video or is_image) and not clean_text:
-                st.warning("⚠️ **AI Media Detection API timed out.** Cannot verify video authenticity right now. Please try again.")
+                st.warning("⚠️ **AI Media Detection API timed out.** Cannot verify media authenticity right now. Please try again.")
                 st.stop()
 
             if final_is_fake:
