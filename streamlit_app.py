@@ -98,7 +98,15 @@ if 'form_key' not in st.session_state:
 # --- UNIFIED UI LAYOUT ---
 text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120, key=f"text_{st.session_state.form_key}")
 st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
-uploaded_file = st.file_uploader("📁 Upload an Image, Text file, or Video:", type=["jpg", "jpeg", "png", "txt", "mp4", "mov"], key=f"file_{st.session_state.form_key}")
+
+# Added help tooltip and a clear caption for pasting
+uploaded_file = st.file_uploader(
+    "📁 Upload or Paste an Image, Text file, or Video:", 
+    type=["jpg", "jpeg", "png", "txt", "mp4", "mov"], 
+    key=f"file_{st.session_state.form_key}",
+    help="💡 Tip: Click inside the upload box and press Ctrl+V (or Cmd+V on Mac) to paste a screenshot directly from your clipboard!"
+)
+st.caption("💡 **Tip:** Click the upload box above and press **Ctrl+V** to paste a screenshot directly from your clipboard.")
 
 col_btn1, col_btn2 = st.columns([1, 1])
 with col_btn1:
