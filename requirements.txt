@@ -11,6 +11,8 @@ tqdm>=4.66
 torch>=2.3
 torchvision
 transformers>=4.42
+onnxruntime
+optimum
 datasets>=2.20
 accelerate>=0.31
 evaluate>=0.4
