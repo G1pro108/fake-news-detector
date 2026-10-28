@@ -49,34 +49,38 @@ st.markdown(
 # ============================================================
 @st.cache_resource
 def load_baseline():
-    tfidf = joblib.load("tfidf.pkl")
-    model = joblib.load("logreg.pkl")
-    return tfidf, model
-
+    try:
+        # FIXED: Pointing to your exact folder structure
+        tfidf = joblib.load("models/baseline/tfidf.pkl")
+        model = joblib.load("models/baseline/logreg.pkl")
+        return tfidf, model
+    except Exception as e:
+        return None, None
 
 @st.cache_resource
 def load_local_vision():
-    return pipeline(
-        "image-classification",
-        model="prithivMLmods/deepfake-detector-model-v1",
-        device=-1,
-    )
-
+    try:
+        return pipeline(
+            "image-classification",
+            model="prithivMLmods/deepfake-detector-model-v1",
+            device=-1,
+        )
+    except Exception:
+        return None
 
 @st.cache_resource
 def load_audio_detector():
-    from jabberjay import Jabberjay
-    return Jabberjay()
-
+    try:
+        from jabberjay import Jabberjay
+        return Jabberjay()
+    except Exception:
+        return None
 
 # Try to load baseline models; warn but continue if missing.
-try:
-    tfidf, base_model = load_baseline()
-    models_loaded = True
-except Exception as e:
-    st.warning(f"⚠️ Baseline text models not loaded: {e}")
-    tfidf, base_model = None, None
-    models_loaded = False
+tfidf, base_model = load_baseline()
+models_loaded = tfidf is not None
+if not models_loaded:
+    st.warning("⚠️ Baseline text models (TF-IDF) not loaded. The app will use other available models.")
 
 
 # ============================================================
@@ -85,6 +89,8 @@ except Exception as e:
 def analyze_audio(uploaded_file):
     """Return (is_fake, confidence, detail) for audio files."""
     detector = load_audio_detector()
+    if not detector:
+        return None, 0.0, "Jabberjay audio detector not installed."
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         tmp.write(uploaded_file.getvalue())
@@ -94,11 +100,14 @@ def analyze_audio(uploaded_file):
         result = detector.detect(tmp_path)
         label = result.label.lower()
         confidence = float(result.confidence)
-        is_fake = "spoof" in label or not result.is_bonafide
+        is_fake = "spoof" in label or not getattr(result, "is_bonafide", False)
         detail = f"Jabberjay → {result.label} (confidence {confidence:.2%})"
         return is_fake, confidence, detail
+    except Exception as e:
+        return None, 0.0, f"Audio analysis failed: {e}"
     finally:
-        os.remove(tmp_path)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 # ============================================================
@@ -106,7 +115,11 @@ def analyze_audio(uploaded_file):
 # ============================================================
 def analyze_image_deepfake(img):
     """Return (is_fake, detail) using a local deepfake classifier."""
-    results = load_local_vision()(img)
+    vision_model = load_local_vision()
+    if not vision_model:
+        return False, "Vision model not loaded."
+    
+    results = vision_model(img)
     top = results[0]
     label = top["label"].lower()
     score = top["score"]
@@ -190,7 +203,8 @@ def extract_video_frames(video_file):
                 frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
 
     vidcap.release()
-    os.remove(tfile.name)
+    if os.path.exists(tfile.name):
+        os.remove(tfile.name)
     return frames
 
 
@@ -251,7 +265,7 @@ def ask_gemini(text):
             api_key=st.secrets["GEMINI_API_KEY"],
         )
         res = client.chat.completions.create(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash", # ✅ FIXED: Valid free model name
             messages=[{
                 "role": "user",
                 "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}",
@@ -271,6 +285,7 @@ def ask_openrouter(text):
         client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=st.secrets["OPENROUTER_API_KEY"],
+            default_headers={"HTTP-Referer": "http://localhost:8501", "X-Title": "Fact Checker"}, # ✅ FIXED: Required headers
         )
         res = client.chat.completions.create(
             model="meta-llama/llama-3.1-8b-instruct:free",
@@ -308,6 +323,27 @@ def ask_sarvam(text):
         return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
     except Exception as e:
         st.warning(f"Sarvam unavailable: {e}")
+        return None
+
+def ask_groq(text):
+    if not _has_secret("GROQ_API_KEY"):
+        return None
+    try:
+        client = OpenAI(
+            base_url="https://api.groq.com/openai/v1", 
+            api_key=st.secrets["GROQ_API_KEY"]
+        )
+        res = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{
+                "role": "user",
+                "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}",
+            }],
+        )
+        verdict = res.choices[0].message.content.strip().upper()
+        return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
+    except Exception as e:
+        st.warning(f"Groq unavailable: {e}")
         return None
 
 
@@ -443,12 +479,14 @@ if analyze_clicked:
             with st.spinner("Analyzing audio for cloning / synthetic speech..."):
                 try:
                     audio_is_fake, _, audio_detail = analyze_audio(uploaded_file)
-                    if audio_is_fake:
+                    if audio_is_fake is True:
                         media_verdict = True
                         st.error(f"🔊 **Audio Deepfake Detected** — {audio_detail}")
-                    else:
+                    elif audio_is_fake is False:
                         media_verdict = False
                         st.success(f"✅ **Audio appears authentic** — {audio_detail}")
+                    else:
+                        st.warning(audio_detail)
                 except Exception as e:
                     st.warning(f"Audio analysis failed: {e}")
 
@@ -510,6 +548,7 @@ if analyze_clicked:
 
             for name, fn in [
                 ("Gemini", ask_gemini),
+                ("Groq", ask_groq), # ✅ ADDED FREE GROQ API
                 ("OpenRouter", ask_openrouter),
                 ("Sarvam", ask_sarvam),
             ]:
