@@ -4,11 +4,15 @@ joblib
 pandas
 transformers
 torch
+torchaudio
 pillow
 pytesseract
 opencv-python-headless
 numpy
-c2pa-python
+fast-c2pa-python
 duckduckgo_search
 openai
 deep-translator
+jabberjay
+librosa
+soundfile
