@@ -50,7 +50,6 @@ st.markdown(
 @st.cache_resource
 def load_baseline():
     try:
-        # FIXED: Pointing to your exact folder structure
         tfidf = joblib.load("models/baseline/tfidf.pkl")
         model = joblib.load("models/baseline/logreg.pkl")
         return tfidf, model
@@ -79,15 +78,12 @@ def load_audio_detector():
 # Try to load baseline models; warn but continue if missing.
 tfidf, base_model = load_baseline()
 models_loaded = tfidf is not None
-if not models_loaded:
-    st.warning("⚠️ Baseline text models (TF-IDF) not loaded. The app will use other available models.")
 
 
 # ============================================================
 # AUDIO CLONING DETECTION
 # ============================================================
 def analyze_audio(uploaded_file):
-    """Return (is_fake, confidence, detail) for audio files."""
     detector = load_audio_detector()
     if not detector:
         return None, 0.0, "Jabberjay audio detector not installed."
@@ -114,7 +110,6 @@ def analyze_audio(uploaded_file):
 # IMAGE DEEPFAKE + ELA TAMPER DETECTION
 # ============================================================
 def analyze_image_deepfake(img):
-    """Return (is_fake, detail) using a local deepfake classifier."""
     vision_model = load_local_vision()
     if not vision_model:
         return False, "Vision model not loaded."
@@ -126,9 +121,7 @@ def analyze_image_deepfake(img):
     is_fake = any(k in label for k in ("fake", "artificial", "ai", "synthetic"))
     return is_fake, f"{label} ({score:.2%})"
 
-
 def ela_manipulation_score(img, quality=90):
-    """Higher score → more likely spliced / locally edited."""
     buffer = io.BytesIO()
     img.convert("RGB").save(buffer, format="JPEG", quality=quality)
     buffer.seek(0)
@@ -139,18 +132,13 @@ def ela_manipulation_score(img, quality=90):
 
 
 # ============================================================
-# C2PA PROVENANCE (stable reader)
+# C2PA PROVENANCE
 # ============================================================
 def analyze_c2pa(uploaded_file):
     if not C2PA_AVAILABLE:
-        return {"status": "Unavailable",
-                "summary": "C2PA reader not installed (fast-c2pa-python missing)."}
-
-    if uploaded_file is None or uploaded_file.name.lower().endswith(
-        (".txt", ".wav", ".mp3", ".m4a", ".flac")
-    ):
+        return {"status": "Unavailable", "summary": "C2PA reader not installed."}
+    if uploaded_file is None or uploaded_file.name.lower().endswith((".txt", ".wav", ".mp3", ".m4a", ".flac")):
         return None
-
     try:
         suffix = os.path.splitext(uploaded_file.name)[1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -161,32 +149,20 @@ def analyze_c2pa(uploaded_file):
         os.remove(tmp_path)
 
         if not metadata:
-            return {"status": "No Manifest",
-                    "summary": "No C2PA manifest found (normal for most web files)."}
+            return {"status": "No Manifest", "summary": "No C2PA manifest found."}
 
-        # Extract signer / AI-generation hints safely
-        if isinstance(metadata, dict):
-            signer = metadata.get("generator") or metadata.get("title") or "Unknown"
-        else:
-            signer = "Unknown"
-
+        signer = metadata.get("generator", "Unknown") if isinstance(metadata, dict) else "Unknown"
         is_ai = "ai" in str(metadata).lower() or "generative" in str(metadata).lower()
-        return {
-            "status": "Valid",
-            "signer": signer,
-            "is_ai": is_ai,
-            "summary": f"Signed by: {signer}. AI-generated: {is_ai}",
-        }
+        return {"status": "Valid", "signer": signer, "is_ai": is_ai, "summary": f"Signed by: {signer}. AI: {is_ai}"}
     except Exception as e:
-        return {"status": "No Manifest",
-                "summary": f"Could not read C2PA ({e})."}
+        return {"status": "No Manifest", "summary": f"Could not read C2PA ({e})."}
 
 
 # ============================================================
-# VIDEO FRAME EXTRACTION (with seek fix)
+# VIDEO FRAME EXTRACTION
 # ============================================================
 def extract_video_frames(video_file):
-    video_file.seek(0)                                   # ✅ CRITICAL FIX
+    video_file.seek(0)
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(video_file.read())
     tfile.close()
@@ -209,10 +185,9 @@ def extract_video_frames(video_file):
 
 
 # ============================================================
-# SAFE FACT-CHECK SEARCH (replaces 350-agent swarm)
+# SAFE FACT-CHECK SEARCH
 # ============================================================
 def fact_check_search(query, max_results=5):
-    """Retry-safe DuckDuckGo search with exponential backoff."""
     for attempt in range(3):
         try:
             with DDGS() as ddgs:
@@ -223,49 +198,53 @@ def fact_check_search(query, max_results=5):
             time.sleep(2 ** attempt)
     return []
 
-
 def analyze_with_search(text):
-    """Returns (score_or_None, detail). Negative score → likely fake."""
     base_query = " ".join(text.split()[:12])
     results = fact_check_search(f'"{base_query}" fact check')
-
     if not results:
-        return None, "No search results (rate-limited or offline)."
-
-    fake_words = {"fake", "hoax", "false", "misleading", "debunked", "fabricated"}
+        return None, "No search results."
+    fake_words = {"fake", "hoax", "false", "misleading", "debunked"}
     real_words = {"true", "confirmed", "official", "verified", "authentic"}
-
     score = 0
     for r in results:
         body = (r.get("body", "") + " " + r.get("title", "")).lower()
-        if any(w in body for w in fake_words):
-            score -= 1
-        if any(w in body for w in real_words):
-            score += 1
-
+        if any(w in body for w in fake_words): score -= 1
+        if any(w in body for w in real_words): score += 1
     return score, f"Scanned {len(results)} fact-check results."
 
 
 # ============================================================
-# OPTIONAL LLM JUDGES (never crash on missing keys)
+# DYNAMIC LLM JUDGES (Auto-detects any key in Secrets)
 # ============================================================
+# If you add any of these keys to Streamlit Secrets, they will auto-activate.
+LLM_PROVIDERS = [
+    {"name": "Gemini", "key": "GEMINI_API_KEY", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
+    {"name": "Groq", "key": "GROQ_API_KEY", "base_url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
+    {"name": "OpenRouter", "key": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1", "model": "meta-llama/llama-3.1-8b-instruct:free"},
+    {"name": "Sarvam", "key": "SARVAM_API_KEY", "base_url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
+]
+
 def _has_secret(key):
     try:
-        return key in st.secrets
+        return key in st.secrets and st.secrets[key].strip() != ""
     except Exception:
         return False
 
-
-def ask_gemini(text):
-    if not _has_secret("GEMINI_API_KEY"):
-        return None
+def ask_llm(provider, text):
+    """Generic function to query any OpenAI-compatible API."""
+    if not _has_secret(provider["key"]):
+        return None # Silently skip if no key
+        
     try:
+        headers = {"HTTP-Referer": "http://localhost:8501", "X-Title": "Fact Checker"} if provider["name"] == "OpenRouter" else None
+        
         client = OpenAI(
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            api_key=st.secrets["GEMINI_API_KEY"],
+            base_url=provider["base_url"],
+            api_key=st.secrets[provider["key"]],
+            default_headers=headers
         )
         res = client.chat.completions.create(
-            model="gemini-1.5-flash", # ✅ FIXED: Valid free model name
+            model=provider["model"],
             messages=[{
                 "role": "user",
                 "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}",
@@ -273,95 +252,20 @@ def ask_gemini(text):
         )
         verdict = res.choices[0].message.content.strip().upper()
         return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
-    except Exception as e:
-        st.warning(f"Gemini unavailable: {e}")
-        return None
-
-
-def ask_openrouter(text):
-    if not _has_secret("OPENROUTER_API_KEY"):
-        return None
-    try:
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=st.secrets["OPENROUTER_API_KEY"],
-            default_headers={"HTTP-Referer": "http://localhost:8501", "X-Title": "Fact Checker"}, # ✅ FIXED: Required headers
-        )
-        res = client.chat.completions.create(
-            model="meta-llama/llama-3.1-8b-instruct:free",
-            messages=[{
-                "role": "user",
-                "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}",
-            }],
-        )
-        verdict = res.choices[0].message.content.strip().upper()
-        return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
-    except Exception as e:
-        st.warning(f"OpenRouter unavailable: {e}")
-        return None
-
-
-def ask_sarvam(text):
-    if not _has_secret("SARVAM_API_KEY"):
-        return None
-    try:
-        client = OpenAI(
-            base_url="https://api.sarvam.ai/v1",
-            api_key=st.secrets["SARVAM_API_KEY"],
-        )
-        res = client.chat.completions.create(
-            model="sarvam-105b",
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Analyze for Indian context. Is this REAL or FAKE? "
-                    f"Return ONLY one word. Text: {text}"
-                ),
-            }],
-        )
-        verdict = res.choices[0].message.content.strip().upper()
-        return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
-    except Exception as e:
-        st.warning(f"Sarvam unavailable: {e}")
-        return None
-
-def ask_groq(text):
-    if not _has_secret("GROQ_API_KEY"):
-        return None
-    try:
-        client = OpenAI(
-            base_url="https://api.groq.com/openai/v1", 
-            api_key=st.secrets["GROQ_API_KEY"]
-        )
-        res = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{
-                "role": "user",
-                "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}",
-            }],
-        )
-        verdict = res.choices[0].message.content.strip().upper()
-        return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
-    except Exception as e:
-        st.warning(f"Groq unavailable: {e}")
-        return None
+    except Exception:
+        return None # Silently fail (won't crash the app, won't show ugly errors)
 
 
 # ============================================================
 # TRUE STATE RESET
 # ============================================================
 def reset_app():
-    """Hard reset: clear every widget key and rerun."""
     for k in list(st.session_state.keys()):
         if k.startswith(("text_", "file_", "form_")):
             del st.session_state[k]
     st.session_state.form_key = 0
     st.rerun()
 
-
-# ============================================================
-# SESSION STATE
-# ============================================================
 if "form_key" not in st.session_state:
     st.session_state.form_key = 0
 
@@ -369,26 +273,14 @@ if "form_key" not in st.session_state:
 # ============================================================
 # UI LAYOUT
 # ============================================================
-text_input = st.text_area(
-    "📝 Copy & Paste text or URL here:",
-    height=120,
-    key=f"text_{st.session_state.form_key}",
-)
-
-st.markdown(
-    "<h4 style='text-align: center; color: gray;'>— OR —</h4>",
-    unsafe_allow_html=True,
-)
+text_input = st.text_area("📝 Copy & Paste text or URL here:", height=120, key=f"text_{st.session_state.form_key}")
+st.markdown("<h4 style='text-align: center; color: gray;'>— OR —</h4>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
     "📎 Upload or Paste an Image, Text, Audio, or Video:",
-    type=[
-        "jpg", "jpeg", "png", "txt",
-        "mp4", "mov",
-        "wav", "mp3", "m4a", "flac",
-    ],
+    type=["jpg", "jpeg", "png", "txt", "mp4", "mov", "wav", "mp3", "m4a", "flac"],
     key=f"file_{st.session_state.form_key}",
-    help="Tip: Click inside the upload box and press Ctrl+V (or Cmd+V) to paste a screenshot directly!",
+    help="Tip: Click inside the upload box and press Ctrl+V to paste a screenshot directly!",
 )
 st.caption("💡 **Tip:** Click the upload box above and press **Ctrl+V** to paste a screenshot directly.")
 
@@ -405,34 +297,27 @@ with col_btn2:
 # ============================================================
 if analyze_clicked:
     input_text = ""
-    media_verdict = None              # None = no media, True = fake, False = real
+    media_verdict = None
     media_analyzed = False
     c2pa_result = None
-    re_origin = "Not found"
-    re_trust = "Unknown"
     is_image = is_video = is_audio = False
 
-    # ---------- PHASE 1: FILE PROCESSING ----------
     if uploaded_file is not None:
         filename = uploaded_file.name.lower()
         c2pa_result = analyze_c2pa(uploaded_file)
 
-        # ---- TEXT FILE ----
         if filename.endswith(".txt"):
             input_text = uploaded_file.read().decode("utf-8", errors="ignore")
             st.info("📄 **Text file loaded.**")
 
-        # ---- IMAGE ----
         elif filename.endswith((".jpg", ".jpeg", ".png")):
             is_image = True
             media_analyzed = True
             img = Image.open(uploaded_file)
-            input_text = pytesseract.image_to_string(img).strip()
-
-            if input_text:
+            ocr_text = pytesseract.image_to_string(img).strip()
+            if ocr_text:
+                input_text += "\n" + ocr_text # Combine OCR text with any typed text
                 st.info("📸 **Text extracted from image.**")
-            else:
-                st.info("No text detected in image. Proceeding with visual-only analysis.")
 
             vision_fake, vision_detail = analyze_image_deepfake(img)
             ela_score = ela_manipulation_score(img)
@@ -447,15 +332,13 @@ if analyze_clicked:
                 media_verdict = False
                 st.success(f"✅ **Image appears authentic** — {vision_detail}, ELA {ela_score}")
 
-        # ---- VIDEO ----
         elif filename.endswith((".mp4", ".mov")):
             is_video = True
             media_analyzed = True
             with st.spinner("Extracting video frames..."):
                 frames = extract_video_frames(uploaded_file)
-
             if not frames:
-                st.warning("Could not extract frames from video.")
+                st.warning("Could not extract frames.")
             else:
                 fake_frames = 0
                 for i, frame in enumerate(frames):
@@ -464,44 +347,38 @@ if analyze_clicked:
                     if v_fake or ela > 40:
                         fake_frames += 1
                         st.warning(f"Frame {i+1}: suspicious — {v_detail}, ELA {ela}")
-
                 if fake_frames > 0:
                     media_verdict = True
-                    st.error(f"🎥 **{fake_frames}/{len(frames)} frames show manipulation signals.**")
+                    st.error(f"🎥 **{fake_frames}/{len(frames)} frames show manipulation.**")
                 else:
                     media_verdict = False
                     st.success(f"✅ All {len(frames)} sampled frames appear authentic.")
 
-        # ---- AUDIO ----
         elif filename.endswith((".wav", ".mp3", ".m4a", ".flac")):
             is_audio = True
             media_analyzed = True
-            with st.spinner("Analyzing audio for cloning / synthetic speech..."):
-                try:
-                    audio_is_fake, _, audio_detail = analyze_audio(uploaded_file)
-                    if audio_is_fake is True:
-                        media_verdict = True
-                        st.error(f"🔊 **Audio Deepfake Detected** — {audio_detail}")
-                    elif audio_is_fake is False:
-                        media_verdict = False
-                        st.success(f"✅ **Audio appears authentic** — {audio_detail}")
-                    else:
-                        st.warning(audio_detail)
-                except Exception as e:
-                    st.warning(f"Audio analysis failed: {e}")
+            with st.spinner("Analyzing audio for cloning..."):
+                audio_is_fake, _, audio_detail = analyze_audio(uploaded_file)
+                if audio_is_fake is True:
+                    media_verdict = True
+                    st.error(f"🔊 **Audio Deepfake Detected** — {audio_detail}")
+                elif audio_is_fake is False:
+                    media_verdict = False
+                    st.success(f"✅ **Audio appears authentic** — {audio_detail}")
+                else:
+                    st.warning(audio_detail)
 
-    # ---- TEXT AREA INPUT ----
-    elif text_input.strip():
-        input_text = text_input.strip()
+    # Combine typed text with file OCR text (if both exist)
+    if text_input.strip():
+        input_text = text_input.strip() + "\n" + input_text
 
-    # ---- NO INPUT ----
-    if not input_text and not is_image and not is_video and not is_audio:
+    # ---- NO INPUT CHECK ----
+    if not input_text.strip() and not is_image and not is_video and not is_audio:
         st.warning("⚠️ Please paste text or upload a file.")
     else:
         clean_text = re.sub(r"http\S+", "", input_text).strip()
 
         if clean_text:
-            # ---------- PHASE 2: TRANSLATION & ORIGIN ----------
             st.subheader("🌐 Phase 1: Language & Source Processing")
             try:
                 translated_text = GoogleTranslator(source="auto", target="en").translate(clean_text)
@@ -510,111 +387,64 @@ if analyze_clicked:
             except Exception:
                 translated_text = clean_text
 
-            try:
-                search_text = re.sub(r"[^\w\s]", "", translated_text)[:80].strip()
-                origin_results = fact_check_search(f'"{search_text}"', max_results=1)
-                if origin_results:
-                    re_origin = origin_results[0]["href"].split("/")[2].replace("www.", "")
-            except Exception:
-                pass
-
-            TRUSTED = [
-                "reuters.com", "apnews.com", "bbc.com", "thehindu.com",
-                "indianexpress.com", "pib.gov.in",
-            ]
-            SATIRE = ["theonion.com", "fakingnews.com"]
-
-            if re_origin != "Not found":
-                if any(s in re_origin for s in SATIRE):
-                    re_trust = "Low (Known Satire)"
-                elif any(t in re_origin for t in TRUSTED):
-                    re_trust = "High (Verified Source)"
-                else:
-                    re_trust = "Medium (Unknown)"
-            else:
-                re_trust = "Unknown (No exact match online)"
-
-            st.markdown(f"**Traced Origin:** `{re_origin}` | **Trust Level:** {re_trust}")
-
-            # ---------- PHASE 3: FACT-CHECK SEARCH ----------
             st.subheader("🔎 Phase 2: Fact-Check Search")
             search_score, search_detail = analyze_with_search(translated_text)
             st.info(search_detail)
 
-            # ---------- PHASE 4: JUDGES (optional) ----------
+            # ---- AI JUDGES ----
             st.subheader("🏛️ Phase 3: Consulting AI Judges...")
             judge_votes = []
             text_for_judges = translated_text[:1500]
+            api_ran = False
 
-            for name, fn in [
-                ("Gemini", ask_gemini),
-                ("Groq", ask_groq), # ✅ ADDED FREE GROQ API
-                ("OpenRouter", ask_openrouter),
-                ("Sarvam", ask_sarvam),
-            ]:
-                with st.spinner(f"Judge {name} analyzing..."):
-                    vote = fn(text_for_judges)
+            for provider in LLM_PROVIDERS:
+                vote = ask_llm(provider, text_for_judges)
                 if vote is not None:
+                    api_ran = True
                     judge_votes.append(vote)
-                    if vote == -1:
-                        st.error(f"Judge {name}: Voted FAKE")
-                    else:
-                        st.success(f"Judge {name}: Voted REAL")
-                else:
-                    st.info(f"Judge {name}: skipped (no key / unavailable)")
+                    if vote == -1: st.error(f"Judge {provider['name']}: Voted FAKE")
+                    else: st.success(f"Judge {provider['name']}: Voted REAL")
+            
+            # REQUIREMENT 3: If no APIs are available, hide the section entirely
+            if not api_ran:
+                st.info("ℹ️ No API keys found in Secrets. Using only local models and web search for consensus.")
 
-            if not judge_votes:
-                st.info("ℹ️ No LLM judges available. Relying on local models + search.")
-
-            # ---------- PHASE 5: WEIGHTED CONSENSUS ----------
+            # ---- CONSENSUS ----
             st.divider()
             st.subheader("🏆 Final Consensus Verdict")
-
             local_fake = media_verdict is True
             search_fake = (search_score is not None and search_score < 0)
             judge_fake = (judge_votes.count(-1) > judge_votes.count(1)) if judge_votes else False
 
-            # Only count a signal's weight if it was actually available
             media_weight = 2 if media_analyzed else 0
             search_weight = 1 if search_score is not None else 0
             judge_weight = 3 if judge_votes else 0
 
-            fake_score = (
-                (media_weight if local_fake else 0)
-                + (search_weight if search_fake else 0)
-                + (judge_weight if judge_votes and judge_fake else 0)
-            )
+            fake_score = ((media_weight if local_fake else 0) + (search_weight if search_fake else 0) + (judge_weight if judge_votes and judge_fake else 0))
             total_weight = media_weight + search_weight + judge_weight
 
-            final_is_fake = (fake_score > (total_weight / 2)) if total_weight > 0 else False
-
-            confidence = (
-                f"Local: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | "
-                f"Search: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | "
-                f"Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
-            )
-
-            # C2PA override
-            if c2pa_result and c2pa_result.get("status") == "Valid" and c2pa_result.get("is_ai"):
-                final_is_fake = True
-                confidence += " | C2PA: AI flag → forced FAKE"
-
-            if final_is_fake:
-                st.error(f"🚨 **VERDICT: LIKELY FAKE / MISLEADING**\n\n{confidence}")
+            # THE BUG FIX: If total_weight is 0, we cannot give a verdict
+            if total_weight == 0:
+                st.warning("⚠️ **INCONCLUSIVE:** No models or search results could process this content. Please check your input or API keys.")
             else:
-                st.success(f"✅ **VERDICT: LIKELY REAL / AUTHENTIC**\n\n{confidence}")
+                final_is_fake = (fake_score > (total_weight / 2))
+                confidence = f"Local: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | Search: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
 
-        # ---------- C2PA REPORT ----------
+                if c2pa_result and c2pa_result.get("status") == "Valid" and c2pa_result.get("is_ai"):
+                    final_is_fake = True
+                    confidence += " | C2PA: AI flag → forced FAKE"
+
+                if final_is_fake:
+                    st.error(f"🚨 **VERDICT: LIKELY FAKE / MISLEADING**\n\n{confidence}")
+                else:
+                    st.success(f"✅ **VERDICT: LIKELY REAL / AUTHENTIC**\n\n{confidence}")
+
         if c2pa_result:
             st.write("---")
             st.subheader("📜 C2PA Provenance Check")
-            if c2pa_result["status"] == "Valid":
-                st.success(c2pa_result["summary"])
-            elif c2pa_result["status"] == "Unavailable":
-                st.info(c2pa_result["summary"])
-            else:
-                st.warning(c2pa_result["summary"])
-
+            if c2pa_result["status"] == "Valid": st.success(c2pa_result["summary"])
+            elif c2pa_result["status"] == "Unavailable": st.info(c2pa_result["summary"])
+            else: st.warning(c2pa_result["summary"])
 
 # ============================================================
 # REPORTING PORTAL
@@ -622,8 +452,7 @@ if analyze_clicked:
 st.write("---")
 st.subheader("📢 Report Misinformation to Authorities")
 st.markdown("""
-If you suspect any content you checked is malicious, defamatory, or spreading panic, please report it immediately:
 *   🚔 **[National Cyber Crime Reporting Portal](https://cybercrime.gov.in/)**
-*   📰 **[PIB Fact Check](https://pib.gov.in/factcheck.aspx)** (WhatsApp: +91-8799717971)
-*   🐦 **Twitter/X:** Tag `@Cyberdost` (Ministry of Home Affairs)
+*   📰 **[PIB Fact Check](https://pib.gov.in/factcheck.aspx)**
+*   🐦 **Twitter/X:** Tag `@Cyberdost`
 """)
