@@ -9,7 +9,7 @@ pillow
 pytesseract
 opencv-python-headless
 numpy
-fast-c2pa-python
+ c2pa-python
 duckduckgo_search
 openai
 deep-translator
