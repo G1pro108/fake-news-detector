@@ -8,9 +8,10 @@ transformers
 opencv-python-headless
 Pillow
 pytesseract
-duckduckgo_search
 deep-translator
 openai
 jabberjay
 librosa
 soundfile
+requests
+beautifulsoup4
