@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Comprehensive LLM Registry
+# Global Multimodal Fact-Checker — Final Optimized Version
 # ============================================================
 
 import streamlit as st
@@ -12,13 +12,14 @@ import tempfile
 import numpy as np
 import cv2
 import pytesseract
+import requests
+from bs4 import BeautifulSoup
 from PIL import Image, ImageChops
 from transformers import pipeline
-from duckduckgo_search import DDGS
 from openai import OpenAI
 from deep_translator import GoogleTranslator
 
-# ---- Optional C2PA (graceful fallback if package missing) ----
+# ---- Optional C2PA ----
 try:
     from fast_c2pa_python import read_c2pa_from_file
     C2PA_AVAILABLE = True
@@ -36,134 +37,28 @@ st.set_page_config(
 st.title("🛡️ Global Multimodal Fact-Checker")
 st.markdown(
     "Supports **Text, URL, Images, Videos, and Audio**. "
-    "Local-first AI with optional LLM judges."
+    "Local-first AI with direct web scraping fallback."
 )
 
 # ============================================================
-# COMPREHENSIVE LLM PROVIDER REGISTRY (Auto-fetches URL)
+# COMPREHENSIVE LLM PROVIDER REGISTRY
 # ============================================================
 PROVIDER_DEFAULTS = {
-    "OpenAI": {
-        "url": "https://api.openai.com/v1",
-        "models": [
-            "gpt-6-astra", "gpt-6", "gpt-5.6-sol", "gpt-5.5", 
-            "gpt-5.4", "gpt-5.3-codex", "o3-mini", "o1-mini", 
-            "gpt-4o", "gpt-4o-mini"
-        ]
-    },
-    "Anthropic": {
-        "url": "https://api.anthropic.com/v1",
-        "models": [
-            "claude-opus-5", "claude-opus-4.7", "claude-sonnet-5", 
-            "claude-haiku-5.5", "claude-3-5-sonnet"
-        ]
-    },
-    "Google Gemini": {
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "models": [
-            "gemini-4-argon", "gemini-3.6-flash", "gemini-3-pro-preview", 
-            "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"
-        ]
-    },
-    "Meta (Llama)": {
-        "url": "https://api.llama-api.com/v1", # Usually via providers like Together, Groq, or Fireworks
-        "models": [
-            "llama-4-maverick", "llama-4-scout", "llama-3.3-70b", 
-            "llama-3.1-70b", "llama-3.1-8b"
-        ]
-    },
-    "Mistral AI": {
-        "url": "https://api.mistral.ai/v1",
-        "models": [
-            "mistral-large-latest", "mistral-small-latest", "ministral-3-14b",
-            "ministral-3-8b", "open-mistral-nemo", "mixtral-8x7b"
-        ]
-    },
-    "xAI (Grok)": {
-        "url": "https://api.x.ai/v1",
-        "models": ["grok-4.5", "grok-4", "grok-3"]
-    },
-    "DeepSeek": {
-        "url": "https://api.deepseek.com",
-        "models": ["deepseek-v4.1-flash", "deepseek-v4", "deepseek-chat", "deepseek-reasoner"]
-    },
-    "Alibaba Cloud (Qwen)": {
-        "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen-max", "qwen-plus", "qwen-turbo"]
-    },
-    "Z.ai (GLM)": {
-        "url": "https://api.z.ai/api/paas/v4/",
-        "models": ["glm-5.3", "glm-5.2", "glm-4.6", "glm-4"]
-    },
-    "Cohere": {
-        "url": "https://api.cohere.ai/v1",
-        "models": ["command-r-plus", "command-r", "command-light"]
-    },
-    "Groq (Ultra-Fast)": {
-        "url": "https://api.groq.com/openai/v1",
-        "models": [
-            "llama-3.3-70b-versatile", "llama-3.1-8b-instant", 
-            "mixtral-8x7b-32768", "gemma2-9b-it"
-        ]
-    },
-    "OpenRouter (Aggregator)": {
-        "url": "https://openrouter.ai/api/v1",
-        "models": [
-            "openai/gpt-6-astra", "anthropic/claude-opus-5", 
-            "meta-llama/llama-4-maverick", "google/gemini-3.6-flash",
-            "deepseek/deepseek-v4.1-flash"
-        ]
-    },
-    "Together AI": {
-        "url": "https://api.together.xyz/v1",
-        "models": [
-            "meta-llama/Llama-4-Maverick", 
-            "Qwen/Qwen3.8-Max", 
-            "deepseek-ai/DeepSeek-V4.1"
-        ]
-    },
-    "Nvidia NIM": {
-        "url": "https://integrate.api.nvidia.com/v1",
-        "models": [
-            "meta/llama-4-maverick", "meta/llama-3.1-70b-instruct", 
-            "nvidia/nemotron-4-340b-instruct", "nvidia/nemotron-nano-12b"
-        ]
-    },
-    "Cerebras": {
-        "url": "https://api.cerebras.ai/v1",
-        "models": ["llama3.1-8b", "llama3.1-70b"]
-    },
-    "Sarvam AI": {
-        "url": "https://api.sarvam.ai/v1",
-        "models": ["sarvam-105b"]
-    },
-    "AI21 Labs": {
-        "url": "https://api.ai21.com/studio/v1",
-        "models": ["jamba-1-5-mini", "jamba-1-5-large"]
-    },
-    "MiniMax": {
-        "url": "https://api.minimax.chat/v1",
-        "models": ["minimax-m3", "minimax-m2.1"]
-    },
-    "Moonshot AI (Kimi)": {
-        "url": "https://api.moonshot.cn/v1",
-        "models": ["kimi-k3.1-pro", "moonshotai/kimi-k2.5"]
-    },
-    "Amazon (Bedrock)": {
-        "url": "https://bedrock-runtime.us-east-1.amazonaws.com",
-        "models": ["nova-pro", "nova-lite", "nova-micro", "nova-premier"]
-    },
-    "Custom (OpenAI-compatible)": {
-        "url": "",
-        "models": ["Custom..."]
-    }
+    "Perplexity": {"url": "https://api.perplexity.ai", "models": ["sonar-pro", "sonar"]},
+    "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "o1-mini"]},
+    "Anthropic": {"url": "https://api.anthropic.com/v1", "models": ["claude-3-5-sonnet", "claude-3-haiku"]},
+    "Google Gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
+    "Groq (Ultra-Fast)": {"url": "https://api.groq.com/openai/v1", "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]},
+    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4o", "meta-llama/llama-3.1-70b-instruct"]},
+    "DeepSeek": {"url": "https://api.deepseek.com", "models": ["deepseek-chat", "deepseek-reasoner"]},
+    "Z.ai (GLM)": {"url": "https://api.z.ai/api/paas/v4/", "models": ["glm-4", "glm-4-flash"]},
+    "Custom (OpenAI-compatible)": {"url": "", "models": ["Custom..."]}
 }
 
 with st.sidebar:
     st.header("⚙️ LLM Judge Settings")
     st.markdown("Configure up to **3** judges simultaneously.")
     
-    # 3 distinct tabs for 3 judges
     tabs = st.tabs(["Judge 1", "Judge 2", "Judge 3"])
     
     for i, tab in enumerate(tabs):
@@ -173,7 +68,6 @@ with st.sidebar:
         
         with tab:
             if state_key in st.session_state:
-                # Show masked key securely
                 saved_key = st.session_state[state_key]['api_key']
                 masked_key = f"{saved_key[:4]}...{saved_key[-4:]}" if len(saved_key) > 8 else "***"
                 
@@ -184,14 +78,10 @@ with st.sidebar:
                     del st.session_state[state_key]
                     st.rerun()
             else:
-                # 1. Select Provider
                 provider_choice = st.selectbox(f"Provider", list(PROVIDER_DEFAULTS.keys()), key=f"prov_{slot_num}")
-                
-                # 2. Auto-fetch Base URL
                 default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
                 base_url = st.text_input(f"Base URL", value=default_url, key=f"url_{slot_num}")
                 
-                # 3. Select Model
                 model_options = PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."]
                 model_choice = st.selectbox(f"Model", model_options, key=f"model_sel_{slot_num}")
                 
@@ -200,7 +90,6 @@ with st.sidebar:
                 else:
                     model_name = model_choice
 
-                # 4. Paste API Key
                 api_key = st.text_input(f"API Key", type="password", key=input_key)
                 
                 if st.button(f"Activate Judge {slot_num}", key=f"btn_{slot_num}", use_container_width=True):
@@ -211,7 +100,6 @@ with st.sidebar:
                             "base_url": base_url,
                             "model": model_name
                         }
-                        # Clear the raw key from the UI widget state immediately
                         del st.session_state[input_key]
                         st.rerun()
                     else:
@@ -239,11 +127,7 @@ def load_hf_fallback():
 @st.cache_resource
 def load_local_vision():
     try:
-        return pipeline(
-            "image-classification",
-            model="prithivMLmods/deepfake-detector-model-v1",
-            device=-1,
-        )
+        return pipeline("image-classification", model="prithivMLmods/deepfake-detector-model-v1", device=-1)
     except Exception:
         return None
 
@@ -259,7 +143,7 @@ tfidf, base_model = load_baseline()
 hf_fallback = load_hf_fallback()
 
 # ============================================================
-# AUDIO & IMAGE DETECTORS
+# OPTIMIZED AUDIO & IMAGE DETECTORS
 # ============================================================
 def analyze_audio(uploaded_file):
     detector = load_audio_detector()
@@ -286,7 +170,12 @@ def analyze_image_deepfake(img):
     vision_model = load_local_vision()
     if not vision_model:
         return False, "Vision model not loaded."
-    results = vision_model(img)
+    
+    # OPTIMIZATION: Resize image to max 512x512 for FAST inference
+    img_fast = img.copy()
+    img_fast.thumbnail((512, 512))
+    
+    results = vision_model(img_fast)
     top = results[0]
     is_fake = any(k in top["label"].lower() for k in ("fake", "artificial", "ai", "synthetic"))
     return is_fake, f"{top['label']} ({top['score']:.2%})"
@@ -322,7 +211,7 @@ def analyze_c2pa(uploaded_file):
         return None
 
 # ============================================================
-# VIDEO FRAME EXTRACTION
+# OPTIMIZED VIDEO FRAME EXTRACTION (Fast)
 # ============================================================
 def extract_video_frames(video_file):
     video_file.seek(0)
@@ -335,11 +224,11 @@ def extract_video_frames(video_file):
     frames = []
 
     if total > 0:
-        for frac in (0.2, 0.5, 0.8):
-            vidcap.set(cv2.CAP_PROP_POS_FRAMES, int(total * frac))
-            ok, frame = vidcap.read()
-            if ok:
-                frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+        # OPTIMIZATION: Grab only 1 frame (at 50%) for speed. 
+        vidcap.set(cv2.CAP_PROP_POS_FRAMES, int(total * 0.5))
+        ok, frame = vidcap.read()
+        if ok:
+            frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
 
     vidcap.release()
     if os.path.exists(tfile.name):
@@ -347,56 +236,80 @@ def extract_video_frames(video_file):
     return frames
 
 # ============================================================
-# SAFE FACT-CHECK SEARCH
+# DYNAMIC WEB SCRAPING VIA URL (No API Needed)
 # ============================================================
-def fact_check_search(query, max_results=5):
-    for attempt in range(2):
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
-            if results:
-                return results
-        except Exception:
-            time.sleep(1)
-    return []
+def search_web_via_url(query):
+    url = "https://html.duckduckgo.com/html/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.post(url, data={"q": query}, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        if response.status_code == 202:
+            return [], "Rate-limited by DuckDuckGo. Try again in a few minutes."
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        results = []
+        
+        for result in soup.find_all("div", class_="result__body"):
+            title_elem = result.find("a", class_="result__a")
+            snippet_elem = result.find("a", class_="result__snippet")
+            
+            if title_elem:
+                title = title_elem.get_text(strip=True)
+                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                results.append({"title": title, "body": snippet})
+                
+            if len(results) >= 3: break
+                
+        if not results:
+            return [], "No results parsed. DuckDuckGo might have changed its layout."
+            
+        return results, "Success"
+    except Exception as e:
+        return [], f"Network error: {e}"
 
 def analyze_with_search(text):
     base_query = " ".join(text.split()[:12])
-    results = fact_check_search(f'"{base_query}" fact check')
+    results, status_msg = search_web_via_url(f'"{base_query}" fact check')
+    
     if not results:
-        return None, "Web search skipped (offline or rate-limited)."
+        return None, status_msg, ""
+
     fake_words = {"fake", "hoax", "false", "misleading", "debunked"}
     real_words = {"true", "confirmed", "official", "verified", "authentic"}
     score = 0
+    live_context = ""
+    
     for r in results:
-        body = (r.get("body", "") + " " + r.get("title", "")).lower()
-        if any(w in body for w in fake_words): score -= 1
-        if any(w in body for w in real_words): score += 1
-    return score, f"Scanned {len(results)} fact-check results."
+        title = r.get("title", "")
+        body = r.get("body", "")
+        combined = f"{title} {body}".lower()
+        live_context += f"- **{title}**: {body}\n"
+        if any(w in combined for w in fake_words): score -= 1
+        if any(w in combined for w in real_words): score += 1
+
+    return score, f"Scraped {len(results)} live web results.", live_context
 
 # ============================================================
-# UNIVERSAL DYNAMIC LLM SCANNER (MERGES UI + SECRETS)
+# UNIVERSAL DYNAMIC LLM SCANNER
 # ============================================================
 def get_dynamic_llm_providers():
     providers = []
-    
-    # 1. Load from Sidebar UI (Slots 1, 2, 3)
     for i in range(1, 4):
         saved = st.session_state.get(f"saved_judge_{i}")
         if saved:
             providers.append(saved)
 
-    # 2. Load from Secrets
     try:
         for key_name in st.secrets:
             if key_name.endswith("_API_KEY") and st.secrets[key_name].strip():
                 prefix = key_name.replace("_API_KEY", "").upper()
-                
-                # Check if we have default URL & Model in our registry
                 url = st.secrets.get(f"{prefix}_BASE_URL")
                 model = st.secrets.get(f"{prefix}_MODEL")
                 
-                # Match with our PROVIDER_DEFAULTS registry if not explicitly provided
                 if not url or not model:
                     for prov, details in PROVIDER_DEFAULTS.items():
                         if prefix in prov.upper().replace(" ", ""):
@@ -499,24 +412,20 @@ if analyze_clicked:
 
         elif filename.endswith((".mp4", ".mov")):
             is_video, media_analyzed = True, True
-            with st.spinner("Extracting video frames..."):
+            with st.spinner("Extracting video frame (Fast Mode)..."):
                 frames = extract_video_frames(uploaded_file)
             if not frames:
                 st.warning("Could not extract frames.")
             else:
-                fake_frames = 0
-                for i, frame in enumerate(frames):
-                    v_fake, v_detail = analyze_image_deepfake(frame)
-                    ela = ela_manipulation_score(frame)
-                    if v_fake or ela > 40:
-                        fake_frames += 1
-                        st.warning(f"Frame {i+1}: suspicious — {v_detail}, ELA {ela}")
-                if fake_frames > 0:
+                v_fake, v_detail = analyze_image_deepfake(frames[0])
+                ela = ela_manipulation_score(frames[0])
+                
+                if v_fake or ela > 40:
                     media_verdict = True
-                    st.error(f"🎥 **{fake_frames}/{len(frames)} frames show manipulation.**")
+                    st.error(f"🎥 **Video shows manipulation signals** — {v_detail}, ELA {ela}")
                 else:
                     media_verdict = False
-                    st.success(f"✅ All {len(frames)} sampled frames appear authentic.")
+                    st.success(f"✅ **Sampled video frame appears authentic.**")
 
         elif filename.endswith((".wav", ".mp3", ".m4a", ".flac")):
             is_audio, media_analyzed = True, True
@@ -563,8 +472,7 @@ if analyze_clicked:
                     else:
                         st.success(f"✅ **Local TF-IDF Model:** REAL (Confidence: {prob:.2f}%)")
                         tfidf_vote = 1
-                except Exception:
-                    pass
+                except Exception: pass
             
             if hf_fallback is not None:
                 try:
@@ -577,26 +485,31 @@ if analyze_clicked:
                     else:
                         st.success(f"✅ **HuggingFace AI Model:** REAL (Confidence: {hf_prob:.2f}%)")
                         hf_vote = 1
-                except Exception:
-                    pass
+                except Exception: pass
 
             text_votes = [v for v in [tfidf_vote, hf_vote] if v is not None]
             final_text_vote = None
             if text_votes:
                 final_text_vote = -1 if text_votes.count(-1) > text_votes.count(1) else 1
                 text_fake = (final_text_vote == -1)
-            else:
-                text_fake = False
+            else: text_fake = False
 
-            # ---------- PHASE 2: FACT-CHECK SEARCH ----------
-            st.subheader("🔎 Phase 2: Fact-Check Search")
-            search_score, search_detail = analyze_with_search(translated_text)
-            st.info(search_detail)
+            # ---------- PHASE 2: DIRECT WEB URL SEARCH ----------
+            st.subheader("🔎 Phase 2: Live Web Search (No API)")
+            search_score, search_detail, live_context = analyze_with_search(translated_text)
+            
+            if search_score is None:
+                st.warning(f"Web search skipped: {search_detail}")
+            else:
+                st.info(search_detail)
+                if live_context:
+                    with st.expander("🌐 View Scraped Web Context"):
+                        st.markdown(live_context)
 
             # ---------- PHASE 3: UNIVERSAL AI JUDGES ----------
             st.subheader("🏛️ Phase 3: Consulting AI Judges...")
             judge_votes = []
-            text_for_judges = translated_text[:1500]
+            text_for_judges = f"Web Context:\n{live_context}\n\nText to evaluate:\n{translated_text[:1500]}"
             api_ran = False
 
             active_providers = get_dynamic_llm_providers()
@@ -611,13 +524,12 @@ if analyze_clicked:
                     judge_votes.append(vote)
                     if vote == -1: st.error(f"Judge {provider['name']}: Voted FAKE")
                     else: st.success(f"Judge {provider['name']}: Voted REAL")
-                else:
-                    st.warning(f"Judge {provider['name']}: Failed.")
+                else: st.warning(f"Judge {provider['name']}: Failed.")
             
             if not api_ran:
-                st.info("ℹ️ No working API keys found. Using only local models and web search.")
+                st.info("ℹ️ No working API keys found. Relying entirely on Local AI + Live Web Context.")
 
-            # ---------- PHASE 4: CONSENSUS ----------
+            # ---------- PHASE 4: CONSENSUS (LIKELY VERDICTS) ----------
             st.divider()
             st.subheader("🏆 Final Consensus Verdict")
             
@@ -634,20 +546,24 @@ if analyze_clicked:
             total_weight = media_weight + text_weight + search_weight + judge_weight
 
             if total_weight == 0:
-                st.warning("⚠️ **INCONCLUSIVE:** The models could not confidently analyze this content. Try providing a longer piece of text.")
+                st.warning("⚠️ **UNKNOWN:** The models could not confidently analyze this content. Try providing a longer piece of text.")
             else:
-                final_is_fake = (fake_score > (total_weight / 2))
+                # Calculate the ratio of fake signals to total signals
+                fake_ratio = fake_score / total_weight
                 
-                confidence = f"Media: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | Text: {'FAKE' if text_fake else ('REAL' if final_text_vote is not None else 'n/a')} | Search: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
+                confidence = f"Media: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | Text: {'FAKE' if text_fake else ('REAL' if final_text_vote is not None else 'n/a')} | Web: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
 
                 if c2pa_result and c2pa_result.get("status") == "Valid" and c2pa_result.get("is_ai"):
-                    final_is_fake = True
+                    fake_ratio = 1.0
                     confidence += " | C2PA: AI flag → forced FAKE"
 
-                if final_is_fake:
+                # Dynamic "Likely" Logic
+                if fake_ratio > 0.6:
                     st.error(f"🚨 **VERDICT: LIKELY FAKE / MISLEADING**\n\n{confidence}")
-                else:
+                elif fake_ratio < 0.4:
                     st.success(f"✅ **VERDICT: LIKELY REAL / AUTHENTIC**\n\n{confidence}")
+                else:
+                    st.warning(f"⚖️ **VERDICT: UNCERTAIN / MIXED SIGNALS**\n\n{confidence}")
 
         # ---------- C2PA REPORT ----------
         if c2pa_result:
