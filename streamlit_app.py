@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Secure 3-Judge UI Version
+# Global Multimodal Fact-Checker — Comprehensive LLM Registry
 # ============================================================
 
 import streamlit as st
@@ -40,16 +40,76 @@ st.markdown(
 )
 
 # ============================================================
-# N8N-STYLE SIDEBAR UI (3 SECURE TABS)
+# COMPREHENSIVE LLM PROVIDER REGISTRY (Auto-fetches URL)
 # ============================================================
 PROVIDER_DEFAULTS = {
-    "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]},
-    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4.1-mini", "meta-llama/llama-3.1-8b-instruct:free"]},
-    "Groq": {"url": "https://api.groq.com/openai/v1", "models": ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768"]},
-    "Gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
-    "Nvidia NIM": {"url": "https://integrate.api.nvidia.com/v1", "models": ["meta/llama-3.1-8b-instruct", "nvidia/nemotron-3-nano-30b-a3b"]},
-    "Z.ai": {"url": "https://api.z.ai/api/paas/v4/", "models": ["glm-4", "glm-4.6"]},
-    "Custom": {"url": "", "models": []}
+    "OpenAI": {
+        "url": "https://api.openai.com/v1",
+        "models": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o3-mini", "gpt-3.5-turbo"]
+    },
+    "OpenRouter": {
+        "url": "https://openrouter.ai/api/v1",
+        "models": [
+            "openai/gpt-4o", 
+            "anthropic/claude-3.5-sonnet", 
+            "meta-llama/llama-3.1-70b-instruct", 
+            "google/gemini-1.5-pro",
+            "deepseek/deepseek-chat"
+        ]
+    },
+    "Groq": {
+        "url": "https://api.groq.com/openai/v1",
+        "models": [
+            "llama-3.3-70b-versatile", 
+            "llama-3.1-8b-instant", 
+            "mixtral-8x7b-32768", 
+            "gemma2-9b-it"
+        ]
+    },
+    "Gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+    },
+    "Mistral": {
+        "url": "https://api.mistral.ai/v1",
+        "models": ["mistral-large-latest", "mistral-small-latest", "open-mistral-nemo"]
+    },
+    "Together AI": {
+        "url": "https://api.together.xyz/v1",
+        "models": [
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo", 
+            "Qwen/Qwen2.5-72B-Instruct-Turbo", 
+            "deepseek-ai/DeepSeek-V3"
+        ]
+    },
+    "Nvidia NIM": {
+        "url": "https://integrate.api.nvidia.com/v1",
+        "models": [
+            "meta/llama-3.1-8b-instruct", 
+            "meta/llama-3.1-70b-instruct", 
+            "nvidia/nemotron-4-340b-instruct"
+        ]
+    },
+    "Z.ai": {
+        "url": "https://api.z.ai/api/paas/v4/",
+        "models": ["glm-4.6", "glm-4", "glm-4-flash"]
+    },
+    "DeepSeek": {
+        "url": "https://api.deepseek.com",
+        "models": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    "Cerebras": {
+        "url": "https://api.cerebras.ai/v1",
+        "models": ["llama3.1-8b", "llama3.1-70b"]
+    },
+    "Sarvam AI": {
+        "url": "https://api.sarvam.ai/v1",
+        "models": ["sarvam-105b"]
+    },
+    "Custom (OpenAI-compatible)": {
+        "url": "",
+        "models": ["Custom..."]
+    }
 }
 
 with st.sidebar:
@@ -77,19 +137,23 @@ with st.sidebar:
                     del st.session_state[state_key]
                     st.rerun()
             else:
+                # 1. Select Provider
                 provider_choice = st.selectbox(f"Provider", list(PROVIDER_DEFAULTS.keys()), key=f"prov_{slot_num}")
+                
+                # 2. Auto-fetch Base URL
                 default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
                 base_url = st.text_input(f"Base URL", value=default_url, key=f"url_{slot_num}")
                 
+                # 3. Select Model
                 model_options = PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."]
                 model_choice = st.selectbox(f"Model", model_options, key=f"model_sel_{slot_num}")
                 
                 if model_choice == "Custom...":
-                    model_name = st.text_input(f"Enter Model Name", value="", key=f"custom_{slot_num}")
+                    model_name = st.text_input(f"Enter Custom Model Name", value="", key=f"custom_{slot_num}")
                 else:
                     model_name = model_choice
 
-                # Password field. SECURITY FIX: Key is passed to st.session_state[input_key]
+                # 4. Paste API Key
                 api_key = st.text_input(f"API Key", type="password", key=input_key)
                 
                 if st.button(f"Activate Judge {slot_num}", key=f"btn_{slot_num}", use_container_width=True):
@@ -100,7 +164,7 @@ with st.sidebar:
                             "base_url": base_url,
                             "model": model_name
                         }
-                        # SECURITY FIX: Clear the raw key from the UI widget state immediately
+                        # Clear the raw key from the UI widget state immediately
                         del st.session_state[input_key]
                         st.rerun()
                     else:
@@ -276,23 +340,23 @@ def get_dynamic_llm_providers():
             providers.append(saved)
 
     # 2. Load from Secrets
-    DEFAULTS = {
-        "GEMINI": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
-        "GROQ": {"url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
-        "OPENROUTER": {"url": "https://openrouter.ai/api/v1", "model": "meta-llama/llama-3.1-8b-instruct:free"},
-        "OPENAI": {"url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-        "MISTRAL": {"url": "https://api.mistral.ai/v1", "model": "mistral-small-latest"},
-        "TOGETHER": {"url": "https://api.together.xyz/v1", "model": "meta-llama/Llama-3-8b-chat-hf"},
-        "SARVAM": {"url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
-    }
-    
     try:
         for key_name in st.secrets:
             if key_name.endswith("_API_KEY") and st.secrets[key_name].strip():
-                prefix = key_name.replace("_API_KEY", "")
-                url = st.secrets.get(f"{prefix}_BASE_URL", DEFAULTS.get(prefix, {}).get("url"))
-                model = st.secrets.get(f"{prefix}_MODEL", DEFAULTS.get(prefix, {}).get("model"))
+                prefix = key_name.replace("_API_KEY", "").upper()
                 
+                # Check if we have default URL & Model in our registry
+                url = st.secrets.get(f"{prefix}_BASE_URL")
+                model = st.secrets.get(f"{prefix}_MODEL")
+                
+                # Match with our PROVIDER_DEFAULTS registry if not explicitly provided
+                if not url or not model:
+                    for prov, details in PROVIDER_DEFAULTS.items():
+                        if prefix in prov.upper().replace(" ", ""):
+                            if not url: url = details["url"]
+                            if not model and details["models"]: model = details["models"][0]
+                            break
+                            
                 if url and model:
                     providers.append({
                         "name": f"{prefix.capitalize()} (Secret)",
