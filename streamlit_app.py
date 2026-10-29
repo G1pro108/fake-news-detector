@@ -40,6 +40,67 @@ st.markdown(
 )
 
 # ============================================================
+# N8N-STYLE SIDEBAR UI FOR API CREDENTIALS
+# ============================================================
+PROVIDER_DEFAULTS = {
+    "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]},
+    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4.1-mini", "meta-llama/llama-3.1-8b-instruct:free", "google/gemini-1.5-flash"]},
+    "Groq": {"url": "https://api.groq.com/openai/v1", "models": ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768"]},
+    "Gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
+    "Nvidia NIM": {"url": "https://integrate.api.nvidia.com/v1", "models": ["meta/llama-3.1-8b-instruct", "nvidia/nemotron-3-nano-30b-a3b"]},
+    "Z.ai": {"url": "https://api.z.ai/api/paas/v4/", "models": ["glm-4", "glm-4.6"]},
+    "Custom": {"url": "", "models": []}
+}
+
+# Initialize session state for user-added APIs
+if "user_apis" not in st.session_state:
+    st.session_state.user_apis = []
+
+with st.sidebar:
+    st.header("⚙️ LLM Judge Settings")
+    st.markdown("Add any API key to activate it as a Judge.")
+    
+    provider_choice = st.selectbox("Provider", list(PROVIDER_DEFAULTS.keys()))
+    
+    default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
+    base_url = st.text_input("Base URL", value=default_url)
+    
+    model_choice = st.selectbox("Model", PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."])
+    if model_choice == "Custom...":
+        model_name = st.text_input("Enter Custom Model Name", value="")
+    else:
+        model_name = model_choice
+
+    api_key = st.text_input("API Key", type="password")
+    
+    if st.button("➕ Add/Activate Judge", use_container_width=True):
+        if api_key and base_url and model_name:
+            # Check if already exists to avoid duplicates
+            existing = [p for p in st.session_state.user_apis if p["name"] == provider_choice]
+            if not existing:
+                st.session_state.user_apis.append({
+                    "name": provider_choice,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "model": model_name
+                })
+                st.success(f"{provider_choice} API Activated!")
+            else:
+                st.warning(f"{provider_choice} is already active.")
+        else:
+            st.error("Please fill out all fields.")
+
+    # Show active APIs
+    if st.session_state.user_apis:
+        st.markdown("### Active Judges")
+        for i, api in enumerate(st.session_state.user_apis):
+            col1, col2 = st.columns([3, 1])
+            col1.write(f"✅ {api['name']} ({api['model']})")
+            if col2.button("❌", key=f"del_{i}"):
+                st.session_state.user_apis.pop(i)
+                st.rerun()
+
+# ============================================================
 # MODEL LOADERS
 # ============================================================
 @st.cache_resource
@@ -198,13 +259,11 @@ def analyze_with_search(text):
     return score, f"Scanned {len(results)} fact-check results."
 
 # ============================================================
-# UNIVERSAL DYNAMIC LLM SCANNER
+# UNIVERSAL DYNAMIC LLM SCANNER (MERGES UI + SECRETS)
 # ============================================================
 def get_dynamic_llm_providers():
-    """Scans Secrets for ANY key ending in _API_KEY and configures it automatically."""
+    """Combines Sidebar UI inputs with Streamlit Secrets."""
     providers = []
-    # Known default URLs for common providers. 
-    # If a user provides a key for something not on this list, they just need to add PREFIX_BASE_URL and PREFIX_MODEL to Secrets.
     DEFAULTS = {
         "GEMINI": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
         "GROQ": {"url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
@@ -215,19 +274,22 @@ def get_dynamic_llm_providers():
         "SARVAM": {"url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
     }
     
+    # 1. Load from Sidebar UI
+    if "user_apis" in st.session_state:
+        providers.extend(st.session_state.user_apis)
+        
+    # 2. Load from Secrets
     try:
         for key_name in st.secrets:
             if key_name.endswith("_API_KEY") and st.secrets[key_name].strip():
                 prefix = key_name.replace("_API_KEY", "")
-                
-                # Check if user provided custom URL/Model in secrets, else use defaults
                 url = st.secrets.get(f"{prefix}_BASE_URL", DEFAULTS.get(prefix, {}).get("url"))
                 model = st.secrets.get(f"{prefix}_MODEL", DEFAULTS.get(prefix, {}).get("model"))
                 
                 if url and model:
                     providers.append({
                         "name": prefix.capitalize(),
-                        "key": key_name,
+                        "api_key": st.secrets[key_name], # Storing the actual key string
                         "base_url": url,
                         "model": model
                     })
@@ -238,15 +300,16 @@ def get_dynamic_llm_providers():
 def ask_llm(provider, text):
     try:
         headers = {"HTTP-Referer": "http://localhost:8501"} if "openrouter" in provider["base_url"] else None
-        client = OpenAI(base_url=provider["base_url"], api_key=st.secrets[provider["key"]], default_headers=headers)
+        # Use the unified api_key field
+        client = OpenAI(base_url=provider["base_url"], api_key=provider["api_key"], default_headers=headers)
         res = client.chat.completions.create(
             model=provider["model"],
             messages=[{"role": "user", "content": f"Is this REAL or FAKE? Return ONLY one word. Text: {text}"}],
         )
         verdict = res.choices[0].message.content.strip().upper()
         return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
-    except Exception:
-        return None
+    except Exception as e:
+        return f"ERROR: {str(e)}" # Return actual error to UI
 
 # ============================================================
 # STATE RESET & UI
@@ -424,12 +487,14 @@ if analyze_clicked:
             text_for_judges = translated_text[:1500]
             api_ran = False
 
-            # Fetch dynamically from Secrets
+            # Fetch dynamically from Secrets AND Sidebar UI
             active_providers = get_dynamic_llm_providers()
 
             for provider in active_providers:
                 vote = ask_llm(provider, text_for_judges)
-                if vote is not None:
+                if isinstance(vote, str) and vote.startswith("ERROR"):
+                    st.error(f"Judge {provider['name']}: {vote}")
+                elif vote is not None:
                     api_ran = True
                     judge_votes.append(vote)
                     if vote == -1: st.error(f"Judge {provider['name']}: Voted FAKE")
