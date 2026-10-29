@@ -45,58 +45,89 @@ st.markdown(
 PROVIDER_DEFAULTS = {
     "OpenAI": {
         "url": "https://api.openai.com/v1",
-        "models": ["gpt-4o", "gpt-4o-mini", "o1-mini", "o3-mini", "gpt-3.5-turbo"]
-    },
-    "OpenRouter": {
-        "url": "https://openrouter.ai/api/v1",
         "models": [
-            "openai/gpt-4o", 
-            "anthropic/claude-3.5-sonnet", 
-            "meta-llama/llama-3.1-70b-instruct", 
-            "google/gemini-1.5-pro",
-            "deepseek/deepseek-chat"
+            "gpt-6-astra", "gpt-6", "gpt-5.6-sol", "gpt-5.5", 
+            "gpt-5.4", "gpt-5.3-codex", "o3-mini", "o1-mini", 
+            "gpt-4o", "gpt-4o-mini"
         ]
     },
-    "Groq": {
+    "Anthropic": {
+        "url": "https://api.anthropic.com/v1",
+        "models": [
+            "claude-opus-5", "claude-opus-4.7", "claude-sonnet-5", 
+            "claude-haiku-5.5", "claude-3-5-sonnet"
+        ]
+    },
+    "Google Gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "models": [
+            "gemini-4-argon", "gemini-3.6-flash", "gemini-3-pro-preview", 
+            "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"
+        ]
+    },
+    "Meta (Llama)": {
+        "url": "https://api.llama-api.com/v1", # Usually via providers like Together, Groq, or Fireworks
+        "models": [
+            "llama-4-maverick", "llama-4-scout", "llama-3.3-70b", 
+            "llama-3.1-70b", "llama-3.1-8b"
+        ]
+    },
+    "Mistral AI": {
+        "url": "https://api.mistral.ai/v1",
+        "models": [
+            "mistral-large-latest", "mistral-small-latest", "ministral-3-14b",
+            "ministral-3-8b", "open-mistral-nemo", "mixtral-8x7b"
+        ]
+    },
+    "xAI (Grok)": {
+        "url": "https://api.x.ai/v1",
+        "models": ["grok-4.5", "grok-4", "grok-3"]
+    },
+    "DeepSeek": {
+        "url": "https://api.deepseek.com",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4", "deepseek-chat", "deepseek-reasoner"]
+    },
+    "Alibaba Cloud (Qwen)": {
+        "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen-max", "qwen-plus", "qwen-turbo"]
+    },
+    "Z.ai (GLM)": {
+        "url": "https://api.z.ai/api/paas/v4/",
+        "models": ["glm-5.3", "glm-5.2", "glm-4.6", "glm-4"]
+    },
+    "Cohere": {
+        "url": "https://api.cohere.ai/v1",
+        "models": ["command-r-plus", "command-r", "command-light"]
+    },
+    "Groq (Ultra-Fast)": {
         "url": "https://api.groq.com/openai/v1",
         "models": [
-            "llama-3.3-70b-versatile", 
-            "llama-3.1-8b-instant", 
-            "mixtral-8x7b-32768", 
-            "gemma2-9b-it"
+            "llama-3.3-70b-versatile", "llama-3.1-8b-instant", 
+            "mixtral-8x7b-32768", "gemma2-9b-it"
         ]
     },
-    "Gemini": {
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
-    },
-    "Mistral": {
-        "url": "https://api.mistral.ai/v1",
-        "models": ["mistral-large-latest", "mistral-small-latest", "open-mistral-nemo"]
+    "OpenRouter (Aggregator)": {
+        "url": "https://openrouter.ai/api/v1",
+        "models": [
+            "openai/gpt-6-astra", "anthropic/claude-opus-5", 
+            "meta-llama/llama-4-maverick", "google/gemini-3.6-flash",
+            "deepseek/deepseek-v4.1-flash"
+        ]
     },
     "Together AI": {
         "url": "https://api.together.xyz/v1",
         "models": [
-            "meta-llama/Llama-3.3-70B-Instruct-Turbo", 
-            "Qwen/Qwen2.5-72B-Instruct-Turbo", 
-            "deepseek-ai/DeepSeek-V3"
+            "meta-llama/Llama-4-Maverick", 
+            "Qwen/Qwen3.8-Max", 
+            "deepseek-ai/DeepSeek-V4.1"
         ]
     },
     "Nvidia NIM": {
         "url": "https://integrate.api.nvidia.com/v1",
         "models": [
-            "meta/llama-3.1-8b-instruct", 
-            "meta/llama-3.1-70b-instruct", 
-            "nvidia/nemotron-4-340b-instruct"
+            "meta/llama-4-maverick", "meta/llama-3.1-70b-instruct", 
+            "nvidia/nemotron-4-340b-instruct", "nvidia/nemotron-nano-12b"
         ]
-    },
-    "Z.ai": {
-        "url": "https://api.z.ai/api/paas/v4/",
-        "models": ["glm-4.6", "glm-4", "glm-4-flash"]
-    },
-    "DeepSeek": {
-        "url": "https://api.deepseek.com",
-        "models": ["deepseek-chat", "deepseek-reasoner"]
     },
     "Cerebras": {
         "url": "https://api.cerebras.ai/v1",
@@ -105,6 +136,22 @@ PROVIDER_DEFAULTS = {
     "Sarvam AI": {
         "url": "https://api.sarvam.ai/v1",
         "models": ["sarvam-105b"]
+    },
+    "AI21 Labs": {
+        "url": "https://api.ai21.com/studio/v1",
+        "models": ["jamba-1-5-mini", "jamba-1-5-large"]
+    },
+    "MiniMax": {
+        "url": "https://api.minimax.chat/v1",
+        "models": ["minimax-m3", "minimax-m2.1"]
+    },
+    "Moonshot AI (Kimi)": {
+        "url": "https://api.moonshot.cn/v1",
+        "models": ["kimi-k3.1-pro", "moonshotai/kimi-k2.5"]
+    },
+    "Amazon (Bedrock)": {
+        "url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "models": ["nova-pro", "nova-lite", "nova-micro", "nova-premier"]
     },
     "Custom (OpenAI-compatible)": {
         "url": "",
