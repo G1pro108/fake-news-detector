@@ -469,13 +469,19 @@ def ask_llm(provider, text):
         return f"ERROR: {str(e)}" 
 
 # ============================================================
-# STATE RESET & UI
+# STATE RESET & UI (FIXED REFRESH BUTTON)
 # ============================================================
 def reset_app():
-    for k in list(st.session_state.keys()):
-        if k.startswith(("text_", "file_", "form_")):
-            del st.session_state[k]
-    st.session_state.form_key = 0
+    # Increment form_key to force new widget keys (e.g., text_1, file_1)
+    st.session_state.form_key = st.session_state.get("form_key", 0) + 1
+    
+    # Also clear out any saved API judges from the sidebar
+    for i in range(1, 4):
+        if f"saved_judge_{i}" in st.session_state:
+            del st.session_state[f"saved_judge_{i}"]
+        if f"api_key_input_{i}" in st.session_state:
+            del st.session_state[f"api_key_input_{i}"]
+            
     st.rerun()
 
 if "form_key" not in st.session_state:
