@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Production Ready
+# Global Multimodal Fact-Checker — Universal Dynamic API Version
 # ============================================================
 
 import streamlit as st
@@ -55,7 +55,6 @@ def load_baseline():
 def load_hf_fallback():
     """Guaranteed working text model directly from Hugging Face"""
     try:
-        # Tiny model, loads in seconds, ensures we always get a text verdict
         return pipeline("text-classification", model="mrm8488/bert-tiny-finetuned-fake-news")
     except Exception:
         return None
@@ -199,25 +198,46 @@ def analyze_with_search(text):
     return score, f"Scanned {len(results)} fact-check results."
 
 # ============================================================
-# DYNAMIC LLM JUDGES
+# UNIVERSAL DYNAMIC LLM SCANNER
 # ============================================================
-LLM_PROVIDERS = [
-    {"name": "Gemini", "key": "GEMINI_API_KEY", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
-    {"name": "Groq", "key": "GROQ_API_KEY", "base_url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
-    {"name": "OpenRouter", "key": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1", "model": "meta-llama/llama-3.1-8b-instruct:free"},
-    {"name": "Sarvam", "key": "SARVAM_API_KEY", "base_url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
-]
-
-def _has_secret(key):
+def get_dynamic_llm_providers():
+    """Scans Secrets for ANY key ending in _API_KEY and configures it automatically."""
+    providers = []
+    # Known default URLs for common providers. 
+    # If a user provides a key for something not on this list, they just need to add PREFIX_BASE_URL and PREFIX_MODEL to Secrets.
+    DEFAULTS = {
+        "GEMINI": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
+        "GROQ": {"url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
+        "OPENROUTER": {"url": "https://openrouter.ai/api/v1", "model": "meta-llama/llama-3.1-8b-instruct:free"},
+        "OPENAI": {"url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+        "MISTRAL": {"url": "https://api.mistral.ai/v1", "model": "mistral-small-latest"},
+        "TOGETHER": {"url": "https://api.together.xyz/v1", "model": "meta-llama/Llama-3-8b-chat-hf"},
+        "SARVAM": {"url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
+    }
+    
     try:
-        return key in st.secrets and st.secrets[key].strip() != ""
+        for key_name in st.secrets:
+            if key_name.endswith("_API_KEY") and st.secrets[key_name].strip():
+                prefix = key_name.replace("_API_KEY", "")
+                
+                # Check if user provided custom URL/Model in secrets, else use defaults
+                url = st.secrets.get(f"{prefix}_BASE_URL", DEFAULTS.get(prefix, {}).get("url"))
+                model = st.secrets.get(f"{prefix}_MODEL", DEFAULTS.get(prefix, {}).get("model"))
+                
+                if url and model:
+                    providers.append({
+                        "name": prefix.capitalize(),
+                        "key": key_name,
+                        "base_url": url,
+                        "model": model
+                    })
     except Exception:
-        return False
+        pass
+    return providers
 
 def ask_llm(provider, text):
-    if not _has_secret(provider["key"]): return None
     try:
-        headers = {"HTTP-Referer": "http://localhost:8501"} if provider["name"] == "OpenRouter" else None
+        headers = {"HTTP-Referer": "http://localhost:8501"} if "openrouter" in provider["base_url"] else None
         client = OpenAI(base_url=provider["base_url"], api_key=st.secrets[provider["key"]], default_headers=headers)
         res = client.chat.completions.create(
             model=provider["model"],
@@ -398,22 +418,27 @@ if analyze_clicked:
             search_score, search_detail = analyze_with_search(translated_text)
             st.info(search_detail)
 
-            # ---------- PHASE 3: AI JUDGES ----------
+            # ---------- PHASE 3: UNIVERSAL AI JUDGES ----------
             st.subheader("🏛️ Phase 3: Consulting AI Judges...")
             judge_votes = []
             text_for_judges = translated_text[:1500]
             api_ran = False
 
-            for provider in LLM_PROVIDERS:
+            # Fetch dynamically from Secrets
+            active_providers = get_dynamic_llm_providers()
+
+            for provider in active_providers:
                 vote = ask_llm(provider, text_for_judges)
                 if vote is not None:
                     api_ran = True
                     judge_votes.append(vote)
                     if vote == -1: st.error(f"Judge {provider['name']}: Voted FAKE")
                     else: st.success(f"Judge {provider['name']}: Voted REAL")
+                else:
+                    st.warning(f"Judge {provider['name']}: Failed (Check API key or limits)")
             
             if not api_ran:
-                st.info("ℹ️ No API keys found in Secrets. Skipping AI Judges.")
+                st.info("ℹ️ No working API keys found. Using only local models and web search.")
 
             # ---------- PHASE 4: CONSENSUS ----------
             st.divider()
@@ -433,7 +458,6 @@ if analyze_clicked:
             total_weight = media_weight + text_weight + search_weight + judge_weight
 
             if total_weight == 0:
-                # Cleaner message as requested
                 st.warning("⚠️ **INCONCLUSIVE:** The models could not confidently analyze this content. Try providing a longer piece of text.")
             else:
                 final_is_fake = (fake_score > (total_weight / 2))
