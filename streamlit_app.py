@@ -44,7 +44,7 @@ st.markdown(
 # ============================================================
 PROVIDER_DEFAULTS = {
     "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]},
-    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4.1-mini", "meta-llama/llama-3.1-8b-instruct:free", "google/gemini-1.5-flash"]},
+    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4.1-mini", "meta-llama/llama-3.1-8b-instruct:free"]},
     "Groq": {"url": "https://api.groq.com/openai/v1", "models": ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768"]},
     "Gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
     "Nvidia NIM": {"url": "https://integrate.api.nvidia.com/v1", "models": ["meta/llama-3.1-8b-instruct", "nvidia/nemotron-3-nano-30b-a3b"]},
@@ -52,52 +52,48 @@ PROVIDER_DEFAULTS = {
     "Custom": {"url": "", "models": []}
 }
 
-# Initialize session state for user-added APIs
-if "user_apis" not in st.session_state:
-    st.session_state.user_apis = []
+if "ui_judges" not in st.session_state:
+    st.session_state.ui_judges = []
 
 with st.sidebar:
     st.header("⚙️ LLM Judge Settings")
-    st.markdown("Add any API key to activate it as a Judge.")
+    st.markdown("Configure up to **3** judges via UI.")
     
-    provider_choice = st.selectbox("Provider", list(PROVIDER_DEFAULTS.keys()))
-    
-    default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
-    base_url = st.text_input("Base URL", value=default_url)
-    
-    model_choice = st.selectbox("Model", PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."])
-    if model_choice == "Custom...":
-        model_name = st.text_input("Enter Custom Model Name", value="")
-    else:
-        model_name = model_choice
-
-    api_key = st.text_input("API Key", type="password")
-    
-    if st.button("➕ Add/Activate Judge", use_container_width=True):
-        if api_key and base_url and model_name:
-            # Check if already exists to avoid duplicates
-            existing = [p for p in st.session_state.user_apis if p["name"] == provider_choice]
-            if not existing:
-                st.session_state.user_apis.append({
-                    "name": provider_choice,
-                    "api_key": api_key,
-                    "base_url": base_url,
-                    "model": model_name
-                })
-                st.success(f"{provider_choice} API Activated!")
-            else:
-                st.warning(f"{provider_choice} is already active.")
+    with st.expander("➕ Add a Judge", expanded=False):
+        provider_choice = st.selectbox("Provider", list(PROVIDER_DEFAULTS.keys()))
+        default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
+        base_url = st.text_input("Base URL", value=default_url)
+        
+        model_choice = st.selectbox("Model", PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."])
+        if model_choice == "Custom...":
+            model_name = st.text_input("Enter Model Name", value="")
         else:
-            st.error("Please fill out all fields.")
+            model_name = model_choice
 
-    # Show active APIs
-    if st.session_state.user_apis:
-        st.markdown("### Active Judges")
-        for i, api in enumerate(st.session_state.user_apis):
-            col1, col2 = st.columns([3, 1])
-            col1.write(f"✅ {api['name']} ({api['model']})")
+        api_key = st.text_input("API Key", type="password")
+        
+        if st.button("Save Judge", use_container_width=True):
+            if len(st.session_state.ui_judges) >= 3:
+                st.warning("Maximum of 3 UI judges allowed. Remove one first.")
+            elif api_key and base_url and model_name:
+                st.session_state.ui_judges.append({
+                    "name": f"{provider_choice} ({model_name})",
+                    "base_url": base_url,
+                    "model": model_name,
+                    "api_key": api_key
+                })
+                st.success("Judge activated!")
+                st.rerun()
+            else:
+                st.error("Please fill out all fields.")
+
+    if st.session_state.ui_judges:
+        st.markdown("### Active UI Judges")
+        for i, j in enumerate(st.session_state.ui_judges):
+            col1, col2 = st.columns([4, 1])
+            col1.write(f"**{i+1}. {j['name']}**")
             if col2.button("❌", key=f"del_{i}"):
-                st.session_state.user_apis.pop(i)
+                st.session_state.ui_judges.pop(i)
                 st.rerun()
 
 # ============================================================
@@ -114,7 +110,6 @@ def load_baseline():
 
 @st.cache_resource
 def load_hf_fallback():
-    """Guaranteed working text model directly from Hugging Face"""
     try:
         return pipeline("text-classification", model="mrm8488/bert-tiny-finetuned-fake-news")
     except Exception:
@@ -262,8 +257,13 @@ def analyze_with_search(text):
 # UNIVERSAL DYNAMIC LLM SCANNER (MERGES UI + SECRETS)
 # ============================================================
 def get_dynamic_llm_providers():
-    """Combines Sidebar UI inputs with Streamlit Secrets."""
     providers = []
+    
+    # 1. Load from Sidebar UI
+    if "ui_judges" in st.session_state:
+        providers.extend(st.session_state.ui_judges)
+
+    # 2. Load from Secrets
     DEFAULTS = {
         "GEMINI": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-1.5-flash"},
         "GROQ": {"url": "https://api.groq.com/openai/v1", "model": "llama3-8b-8192"},
@@ -274,11 +274,6 @@ def get_dynamic_llm_providers():
         "SARVAM": {"url": "https://api.sarvam.ai/v1", "model": "sarvam-105b"}
     }
     
-    # 1. Load from Sidebar UI
-    if "user_apis" in st.session_state:
-        providers.extend(st.session_state.user_apis)
-        
-    # 2. Load from Secrets
     try:
         for key_name in st.secrets:
             if key_name.endswith("_API_KEY") and st.secrets[key_name].strip():
@@ -288,10 +283,10 @@ def get_dynamic_llm_providers():
                 
                 if url and model:
                     providers.append({
-                        "name": prefix.capitalize(),
-                        "api_key": st.secrets[key_name], # Storing the actual key string
+                        "name": f"{prefix.capitalize()} (Secret)",
                         "base_url": url,
-                        "model": model
+                        "model": model,
+                        "api_key": st.secrets[key_name]
                     })
     except Exception:
         pass
@@ -300,7 +295,6 @@ def get_dynamic_llm_providers():
 def ask_llm(provider, text):
     try:
         headers = {"HTTP-Referer": "http://localhost:8501"} if "openrouter" in provider["base_url"] else None
-        # Use the unified api_key field
         client = OpenAI(base_url=provider["base_url"], api_key=provider["api_key"], default_headers=headers)
         res = client.chat.completions.create(
             model=provider["model"],
@@ -309,7 +303,7 @@ def ask_llm(provider, text):
         verdict = res.choices[0].message.content.strip().upper()
         return -1 if "FAKE" in verdict else (1 if "REAL" in verdict else None)
     except Exception as e:
-        return f"ERROR: {str(e)}" # Return actual error to UI
+        return f"ERROR: {str(e)}" 
 
 # ============================================================
 # STATE RESET & UI
@@ -437,7 +431,6 @@ if analyze_clicked:
             tfidf_vote = None
             hf_vote = None
 
-            # 1. Run Local TF-IDF
             if tfidf is not None and base_model is not None:
                 try:
                     vec = tfidf.transform([translated_text])
@@ -452,7 +445,6 @@ if analyze_clicked:
                 except Exception:
                     pass
             
-            # 2. Run HuggingFace Fallback (Guaranteed to work)
             if hf_fallback is not None:
                 try:
                     hf_res = hf_fallback(translated_text[:512])[0]
@@ -467,7 +459,6 @@ if analyze_clicked:
                 except Exception:
                     pass
 
-            # Calculate combined text vote
             text_votes = [v for v in [tfidf_vote, hf_vote] if v is not None]
             final_text_vote = None
             if text_votes:
@@ -487,11 +478,11 @@ if analyze_clicked:
             text_for_judges = translated_text[:1500]
             api_ran = False
 
-            # Fetch dynamically from Secrets AND Sidebar UI
             active_providers = get_dynamic_llm_providers()
 
             for provider in active_providers:
                 vote = ask_llm(provider, text_for_judges)
+                
                 if isinstance(vote, str) and vote.startswith("ERROR"):
                     st.error(f"Judge {provider['name']}: {vote}")
                 elif vote is not None:
@@ -500,7 +491,7 @@ if analyze_clicked:
                     if vote == -1: st.error(f"Judge {provider['name']}: Voted FAKE")
                     else: st.success(f"Judge {provider['name']}: Voted REAL")
                 else:
-                    st.warning(f"Judge {provider['name']}: Failed (Check API key or limits)")
+                    st.warning(f"Judge {provider['name']}: Failed.")
             
             if not api_ran:
                 st.info("ℹ️ No working API keys found. Using only local models and web search.")
@@ -513,7 +504,6 @@ if analyze_clicked:
             search_fake = (search_score is not None and search_score < 0)
             judge_fake = (judge_votes.count(-1) > judge_votes.count(1)) if judge_votes else False
 
-            # Weights: Media=2, Text=2, Search=1, Judges=3
             media_weight = 2 if media_analyzed else 0
             text_weight = 2 if final_text_vote is not None else 0
             search_weight = 1 if search_score is not None else 0
