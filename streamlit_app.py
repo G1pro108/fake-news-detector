@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Universal Dynamic API Version
+# Global Multimodal Fact-Checker — Secure 3-Judge UI Version
 # ============================================================
 
 import streamlit as st
@@ -40,7 +40,7 @@ st.markdown(
 )
 
 # ============================================================
-# N8N-STYLE SIDEBAR UI (3 TABS FOR 3 JUDGES)
+# N8N-STYLE SIDEBAR UI (3 SECURE TABS)
 # ============================================================
 PROVIDER_DEFAULTS = {
     "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]},
@@ -56,24 +56,28 @@ with st.sidebar:
     st.header("⚙️ LLM Judge Settings")
     st.markdown("Configure up to **3** judges simultaneously.")
     
-    # Create 3 distinct tabs for the 3 judges
+    # 3 distinct tabs for 3 judges
     tabs = st.tabs(["Judge 1", "Judge 2", "Judge 3"])
     
     for i, tab in enumerate(tabs):
         slot_num = i + 1
         state_key = f"saved_judge_{slot_num}"
+        input_key = f"api_key_input_{slot_num}"
         
         with tab:
-            # If this judge is already saved, show status and a remove button
             if state_key in st.session_state:
+                # Show masked key securely
+                saved_key = st.session_state[state_key]['api_key']
+                masked_key = f"{saved_key[:4]}...{saved_key[-4:]}" if len(saved_key) > 8 else "***"
+                
                 st.success(f"✅ Active: {st.session_state[state_key]['name']}")
+                st.caption(f"Key: {masked_key}")
+                
                 if st.button(f"Remove Judge {slot_num}", key=f"rem_{slot_num}", use_container_width=True):
                     del st.session_state[state_key]
                     st.rerun()
             else:
-                # Configuration form
                 provider_choice = st.selectbox(f"Provider", list(PROVIDER_DEFAULTS.keys()), key=f"prov_{slot_num}")
-                
                 default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
                 base_url = st.text_input(f"Base URL", value=default_url, key=f"url_{slot_num}")
                 
@@ -85,8 +89,8 @@ with st.sidebar:
                 else:
                     model_name = model_choice
 
-                # Password field to secure the API key
-                api_key = st.text_input(f"API Key", type="password", key=f"key_{slot_num}")
+                # Password field. SECURITY FIX: Key is passed to st.session_state[input_key]
+                api_key = st.text_input(f"API Key", type="password", key=input_key)
                 
                 if st.button(f"Activate Judge {slot_num}", key=f"btn_{slot_num}", use_container_width=True):
                     if api_key and base_url and model_name:
@@ -96,6 +100,8 @@ with st.sidebar:
                             "base_url": base_url,
                             "model": model_name
                         }
+                        # SECURITY FIX: Clear the raw key from the UI widget state immediately
+                        del st.session_state[input_key]
                         st.rerun()
                     else:
                         st.error("Please fill all fields.")
@@ -263,7 +269,7 @@ def analyze_with_search(text):
 def get_dynamic_llm_providers():
     providers = []
     
-    # 1. Load from the 3 Sidebar UI Tabs
+    # 1. Load from Sidebar UI (Slots 1, 2, 3)
     for i in range(1, 4):
         saved = st.session_state.get(f"saved_judge_{i}")
         if saved:
@@ -414,11 +420,9 @@ if analyze_clicked:
                 else:
                     st.warning(audio_detail)
 
-    # Combine typed text with file OCR text
     if text_input.strip():
         input_text = text_input.strip() + "\n" + input_text
 
-    # ---- NO INPUT CHECK ----
     if not input_text.strip() and not is_image and not is_video and not is_audio:
         st.warning("⚠️ Please paste text or upload a file.")
     else:
