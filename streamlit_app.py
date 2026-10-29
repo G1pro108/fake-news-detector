@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Final Optimized Version
+# Global Multimodal Fact-Checker — Comprehensive LLM Registry
 # ============================================================
 
 import streamlit as st
@@ -19,7 +19,7 @@ from transformers import pipeline
 from openai import OpenAI
 from deep_translator import GoogleTranslator
 
-# ---- Optional C2PA ----
+# ---- Optional C2PA (graceful fallback if package missing) ----
 try:
     from fast_c2pa_python import read_c2pa_from_file
     C2PA_AVAILABLE = True
@@ -44,15 +44,120 @@ st.markdown(
 # COMPREHENSIVE LLM PROVIDER REGISTRY
 # ============================================================
 PROVIDER_DEFAULTS = {
-    "Perplexity": {"url": "https://api.perplexity.ai", "models": ["sonar-pro", "sonar"]},
-    "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "o1-mini"]},
-    "Anthropic": {"url": "https://api.anthropic.com/v1", "models": ["claude-3-5-sonnet", "claude-3-haiku"]},
-    "Google Gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
-    "Groq (Ultra-Fast)": {"url": "https://api.groq.com/openai/v1", "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]},
-    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "models": ["openai/gpt-4o", "meta-llama/llama-3.1-70b-instruct"]},
-    "DeepSeek": {"url": "https://api.deepseek.com", "models": ["deepseek-chat", "deepseek-reasoner"]},
-    "Z.ai (GLM)": {"url": "https://api.z.ai/api/paas/v4/", "models": ["glm-4", "glm-4-flash"]},
-    "Custom (OpenAI-compatible)": {"url": "", "models": ["Custom..."]}
+    "OpenAI": {
+        "url": "https://api.openai.com/v1",
+        "models": [
+            "gpt-6-astra", "gpt-6", "gpt-5.6-sol", "gpt-5.5", 
+            "gpt-5.4", "gpt-5.3-codex", "o3-mini", "o1-mini", 
+            "gpt-4o", "gpt-4o-mini"
+        ]
+    },
+    "Anthropic": {
+        "url": "https://api.anthropic.com/v1",
+        "models": [
+            "claude-opus-5", "claude-opus-4.7", "claude-sonnet-5", 
+            "claude-haiku-5.5", "claude-3-5-sonnet"
+        ]
+    },
+    "Google Gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "models": [
+            "gemini-4-argon", "gemini-3.6-flash", "gemini-3-pro-preview", 
+            "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"
+        ]
+    },
+    "Meta (Llama)": {
+        "url": "https://api.llama-api.com/v1",
+        "models": [
+            "llama-4-maverick", "llama-4-scout", "llama-3.3-70b", 
+            "llama-3.1-70b", "llama-3.1-8b"
+        ]
+    },
+    "Mistral AI": {
+        "url": "https://api.mistral.ai/v1",
+        "models": [
+            "mistral-large-latest", "mistral-small-latest", "ministral-3-14b",
+            "ministral-3-8b", "open-mistral-nemo", "mixtral-8x7b"
+        ]
+    },
+    "xAI (Grok)": {
+        "url": "https://api.x.ai/v1",
+        "models": ["grok-4.5", "grok-4", "grok-3"]
+    },
+    "DeepSeek": {
+        "url": "https://api.deepseek.com",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4", "deepseek-chat", "deepseek-reasoner"]
+    },
+    "Alibaba Cloud (Qwen)": {
+        "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen-max", "qwen-plus", "qwen-turbo"]
+    },
+    "Z.ai (GLM)": {
+        "url": "https://api.z.ai/api/paas/v4/",
+        "models": ["glm-5.3", "glm-5.2", "glm-4.6", "glm-4"]
+    },
+    "Cohere": {
+        "url": "https://api.cohere.ai/v1",
+        "models": ["command-r-plus", "command-r", "command-light"]
+    },
+    "Groq (Ultra-Fast)": {
+        "url": "https://api.groq.com/openai/v1",
+        "models": [
+            "llama-3.3-70b-versatile", "llama-3.1-8b-instant", 
+            "mixtral-8x7b-32768", "gemma2-9b-it"
+        ]
+    },
+    "OpenRouter (Aggregator)": {
+        "url": "https://openrouter.ai/api/v1",
+        "models": [
+            "openai/gpt-6-astra", "anthropic/claude-opus-5", 
+            "meta-llama/llama-4-maverick", "google/gemini-3.6-flash",
+            "deepseek/deepseek-v4.1-flash"
+        ]
+    },
+    "Together AI": {
+        "url": "https://api.together.xyz/v1",
+        "models": [
+            "meta-llama/Llama-4-Maverick", 
+            "Qwen/Qwen3.8-Max", 
+            "deepseek-ai/DeepSeek-V4.1"
+        ]
+    },
+    "Nvidia NIM": {
+        "url": "https://integrate.api.nvidia.com/v1",
+        "models": [
+            "meta/llama-4-maverick", "meta/llama-3.1-70b-instruct", 
+            "nvidia/nemotron-4-340b-instruct", "nvidia/nemotron-nano-12b"
+        ]
+    },
+    "Cerebras": {
+        "url": "https://api.cerebras.ai/v1",
+        "models": ["llama3.1-8b", "llama3.1-70b"]
+    },
+    "Sarvam AI": {
+        "url": "https://api.sarvam.ai/v1",
+        "models": ["sarvam-105b"]
+    },
+    "AI21 Labs": {
+        "url": "https://api.ai21.com/studio/v1",
+        "models": ["jamba-1-5-mini", "jamba-1-5-large"]
+    },
+    "MiniMax": {
+        "url": "https://api.minimax.chat/v1",
+        "models": ["minimax-m3", "minimax-m2.1"]
+    },
+    "Moonshot AI (Kimi)": {
+        "url": "https://api.moonshot.cn/v1",
+        "models": ["kimi-k3.1-pro", "moonshotai/kimi-k2.5"]
+    },
+    "Amazon (Bedrock)": {
+        "url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "models": ["nova-pro", "nova-lite", "nova-micro", "nova-premier"]
+    },
+    "Custom (OpenAI-compatible)": {
+        "url": "",
+        "models": ["Custom..."]
+    }
 }
 
 with st.sidebar:
@@ -171,7 +276,6 @@ def analyze_image_deepfake(img):
     if not vision_model:
         return False, "Vision model not loaded."
     
-    # OPTIMIZATION: Resize image to max 512x512 for FAST inference
     img_fast = img.copy()
     img_fast.thumbnail((512, 512))
     
@@ -211,7 +315,7 @@ def analyze_c2pa(uploaded_file):
         return None
 
 # ============================================================
-# OPTIMIZED VIDEO FRAME EXTRACTION (Fast)
+# FAST VIDEO FRAME EXTRACTION
 # ============================================================
 def extract_video_frames(video_file):
     video_file.seek(0)
@@ -224,7 +328,7 @@ def extract_video_frames(video_file):
     frames = []
 
     if total > 0:
-        # OPTIMIZATION: Grab only 1 frame (at 50%) for speed. 
+        # Grab only 1 frame at 50% for speed
         vidcap.set(cv2.CAP_PROP_POS_FRAMES, int(total * 0.5))
         ok, frame = vidcap.read()
         if ok:
@@ -236,7 +340,7 @@ def extract_video_frames(video_file):
     return frames
 
 # ============================================================
-# DYNAMIC WEB SCRAPING VIA URL (No API Needed)
+# DIRECT WEB SCRAPER (No API Needed)
 # ============================================================
 def search_web_via_url(query):
     url = "https://html.duckduckgo.com/html/"
@@ -248,7 +352,7 @@ def search_web_via_url(query):
         response.raise_for_status()
         
         if response.status_code == 202:
-            return [], "Rate-limited by DuckDuckGo. Try again in a few minutes."
+            return [], "Rate-limited by DuckDuckGo."
             
         soup = BeautifulSoup(response.text, "html.parser")
         results = []
@@ -265,7 +369,7 @@ def search_web_via_url(query):
             if len(results) >= 3: break
                 
         if not results:
-            return [], "No results parsed. DuckDuckGo might have changed its layout."
+            return [], "No results parsed."
             
         return results, "Success"
     except Exception as e:
@@ -492,7 +596,8 @@ if analyze_clicked:
             if text_votes:
                 final_text_vote = -1 if text_votes.count(-1) > text_votes.count(1) else 1
                 text_fake = (final_text_vote == -1)
-            else: text_fake = False
+            else: 
+                text_fake = False
 
             # ---------- PHASE 2: DIRECT WEB URL SEARCH ----------
             st.subheader("🔎 Phase 2: Live Web Search (No API)")
@@ -529,7 +634,7 @@ if analyze_clicked:
             if not api_ran:
                 st.info("ℹ️ No working API keys found. Relying entirely on Local AI + Live Web Context.")
 
-            # ---------- PHASE 4: CONSENSUS (LIKELY VERDICTS) ----------
+            # ---------- PHASE 4: CONSENSUS (FIXED UNKNOWN BUG) ----------
             st.divider()
             st.subheader("🏆 Final Consensus Verdict")
             
@@ -538,7 +643,9 @@ if analyze_clicked:
             judge_fake = (judge_votes.count(-1) > judge_votes.count(1)) if judge_votes else False
 
             media_weight = 2 if media_analyzed else 0
-            text_weight = 2 if final_text_vote is not None else 0
+            # FIX: If there is text, we ALWAYS give it weight now, even if local models fail.
+            # This prevents the total_weight from being 0.
+            text_weight = 2 if clean_text else 0
             search_weight = 1 if search_score is not None else 0
             judge_weight = 3 if judge_votes else 0
 
@@ -548,16 +655,14 @@ if analyze_clicked:
             if total_weight == 0:
                 st.warning("⚠️ **UNKNOWN:** The models could not confidently analyze this content. Try providing a longer piece of text.")
             else:
-                # Calculate the ratio of fake signals to total signals
                 fake_ratio = fake_score / total_weight
                 
-                confidence = f"Media: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | Text: {'FAKE' if text_fake else ('REAL' if final_text_vote is not None else 'n/a')} | Web: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
+                confidence = f"Media: {'FAKE' if local_fake else ('REAL' if media_analyzed else 'n/a')} | Text: {'FAKE' if text_fake else 'REAL'} | Web: {'FAKE' if search_fake else ('REAL' if search_score is not None else 'n/a')} | Judges: {judge_votes.count(-1)}F / {judge_votes.count(1)}R"
 
                 if c2pa_result and c2pa_result.get("status") == "Valid" and c2pa_result.get("is_ai"):
                     fake_ratio = 1.0
                     confidence += " | C2PA: AI flag → forced FAKE"
 
-                # Dynamic "Likely" Logic
                 if fake_ratio > 0.6:
                     st.error(f"🚨 **VERDICT: LIKELY FAKE / MISLEADING**\n\n{confidence}")
                 elif fake_ratio < 0.4:
