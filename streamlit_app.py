@@ -40,7 +40,7 @@ st.markdown(
 )
 
 # ============================================================
-# N8N-STYLE SIDEBAR UI FOR API CREDENTIALS
+# N8N-STYLE SIDEBAR UI (3 TABS FOR 3 JUDGES)
 # ============================================================
 PROVIDER_DEFAULTS = {
     "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]},
@@ -52,49 +52,53 @@ PROVIDER_DEFAULTS = {
     "Custom": {"url": "", "models": []}
 }
 
-if "ui_judges" not in st.session_state:
-    st.session_state.ui_judges = []
-
 with st.sidebar:
     st.header("⚙️ LLM Judge Settings")
-    st.markdown("Configure up to **3** judges via UI.")
+    st.markdown("Configure up to **3** judges simultaneously.")
     
-    with st.expander("➕ Add a Judge", expanded=False):
-        provider_choice = st.selectbox("Provider", list(PROVIDER_DEFAULTS.keys()))
-        default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
-        base_url = st.text_input("Base URL", value=default_url)
+    # Create 3 distinct tabs for the 3 judges
+    tabs = st.tabs(["Judge 1", "Judge 2", "Judge 3"])
+    
+    for i, tab in enumerate(tabs):
+        slot_num = i + 1
+        state_key = f"saved_judge_{slot_num}"
         
-        model_choice = st.selectbox("Model", PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."])
-        if model_choice == "Custom...":
-            model_name = st.text_input("Enter Model Name", value="")
-        else:
-            model_name = model_choice
-
-        api_key = st.text_input("API Key", type="password")
-        
-        if st.button("Save Judge", use_container_width=True):
-            if len(st.session_state.ui_judges) >= 3:
-                st.warning("Maximum of 3 UI judges allowed. Remove one first.")
-            elif api_key and base_url and model_name:
-                st.session_state.ui_judges.append({
-                    "name": f"{provider_choice} ({model_name})",
-                    "base_url": base_url,
-                    "model": model_name,
-                    "api_key": api_key
-                })
-                st.success("Judge activated!")
-                st.rerun()
+        with tab:
+            # If this judge is already saved, show status and a remove button
+            if state_key in st.session_state:
+                st.success(f"✅ Active: {st.session_state[state_key]['name']}")
+                if st.button(f"Remove Judge {slot_num}", key=f"rem_{slot_num}", use_container_width=True):
+                    del st.session_state[state_key]
+                    st.rerun()
             else:
-                st.error("Please fill out all fields.")
+                # Configuration form
+                provider_choice = st.selectbox(f"Provider", list(PROVIDER_DEFAULTS.keys()), key=f"prov_{slot_num}")
+                
+                default_url = PROVIDER_DEFAULTS[provider_choice]["url"]
+                base_url = st.text_input(f"Base URL", value=default_url, key=f"url_{slot_num}")
+                
+                model_options = PROVIDER_DEFAULTS[provider_choice]["models"] + ["Custom..."]
+                model_choice = st.selectbox(f"Model", model_options, key=f"model_sel_{slot_num}")
+                
+                if model_choice == "Custom...":
+                    model_name = st.text_input(f"Enter Model Name", value="", key=f"custom_{slot_num}")
+                else:
+                    model_name = model_choice
 
-    if st.session_state.ui_judges:
-        st.markdown("### Active UI Judges")
-        for i, j in enumerate(st.session_state.ui_judges):
-            col1, col2 = st.columns([4, 1])
-            col1.write(f"**{i+1}. {j['name']}**")
-            if col2.button("❌", key=f"del_{i}"):
-                st.session_state.ui_judges.pop(i)
-                st.rerun()
+                # Password field to secure the API key
+                api_key = st.text_input(f"API Key", type="password", key=f"key_{slot_num}")
+                
+                if st.button(f"Activate Judge {slot_num}", key=f"btn_{slot_num}", use_container_width=True):
+                    if api_key and base_url and model_name:
+                        st.session_state[state_key] = {
+                            "name": f"{provider_choice} ({model_name})",
+                            "api_key": api_key,
+                            "base_url": base_url,
+                            "model": model_name
+                        }
+                        st.rerun()
+                    else:
+                        st.error("Please fill all fields.")
 
 # ============================================================
 # MODEL LOADERS
@@ -259,9 +263,11 @@ def analyze_with_search(text):
 def get_dynamic_llm_providers():
     providers = []
     
-    # 1. Load from Sidebar UI
-    if "ui_judges" in st.session_state:
-        providers.extend(st.session_state.ui_judges)
+    # 1. Load from the 3 Sidebar UI Tabs
+    for i in range(1, 4):
+        saved = st.session_state.get(f"saved_judge_{i}")
+        if saved:
+            providers.append(saved)
 
     # 2. Load from Secrets
     DEFAULTS = {
