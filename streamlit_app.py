@@ -1,5 +1,5 @@
 # ============================================================
-# Global Multimodal Fact-Checker — Comprehensive LLM Registry
+# Global Multimodal Fact-Checker — Multi-Tier Search Fallback
 # ============================================================
 
 import streamlit as st
@@ -19,6 +19,12 @@ from transformers import pipeline
 from openai import OpenAI
 from deep_translator import GoogleTranslator
 
+# Try importing the DDG library as the primary fallback
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    DDGS = None
+
 # ---- Optional C2PA (graceful fallback if package missing) ----
 try:
     from fast_c2pa_python import read_c2pa_from_file
@@ -37,7 +43,7 @@ st.set_page_config(
 st.title("🛡️ Global Multimodal Fact-Checker")
 st.markdown(
     "Supports **Text, URL, Images, Videos, and Audio**. "
-    "Local-first AI with direct web scraping fallback."
+    "Local-first AI with multi-tier web fallback."
 )
 
 # ============================================================
@@ -328,7 +334,6 @@ def extract_video_frames(video_file):
     frames = []
 
     if total > 0:
-        # Grab only 1 frame at 50% for speed
         vidcap.set(cv2.CAP_PROP_POS_FRAMES, int(total * 0.5))
         ok, frame = vidcap.read()
         if ok:
@@ -340,44 +345,62 @@ def extract_video_frames(video_file):
     return frames
 
 # ============================================================
-# DIRECT WEB SCRAPER (No API Needed)
+# MULTI-TIER WEB SCRAPER (FIXES CLOUD TIMEOUTS)
 # ============================================================
-def search_web_via_url(query):
-    url = "https://html.duckduckgo.com/html/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+def search_web_multi_tier(query):
+    # Tier 1: DuckDuckGo Library
+    if DDGS:
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=3))
+                if results:
+                    return results, "Success (DDG Library)"
+        except Exception:
+            pass
+
+    # Tier 2: Direct DDG HTML Scrape
     try:
-        response = requests.post(url, data={"q": query}, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        if response.status_code == 202:
-            return [], "Rate-limited by DuckDuckGo."
-            
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = []
-        
-        for result in soup.find_all("div", class_="result__body"):
-            title_elem = result.find("a", class_="result__a")
-            snippet_elem = result.find("a", class_="result__snippet")
-            
-            if title_elem:
-                title = title_elem.get_text(strip=True)
-                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                results.append({"title": title, "body": snippet})
-                
-            if len(results) >= 3: break
-                
-        if not results:
-            return [], "No results parsed."
-            
-        return results, "Success"
-    except Exception as e:
-        return [], f"Network error: {e}"
+        url = "https://html.duckduckgo.com/html/"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.post(url, data={"q": query}, headers=headers, timeout=5)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            results = []
+            for result in soup.find_all("div", class_="result__body"):
+                title = result.find("a", class_="result__a")
+                snippet = result.find("a", class_="result__snippet")
+                if title:
+                    results.append({"title": title.get_text(strip=True), "body": snippet.get_text(strip=True) if snippet else ""})
+                if len(results) >= 3: break
+            if results:
+                return results, "Success (DDG HTML)"
+    except Exception:
+        pass
+
+    # Tier 3: Bing HTML Scrape (Cloud IPs rarely block Bing)
+    try:
+        url = f"https://www.bing.com/search?q={query}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            results = []
+            for li in soup.find_all("li", class_="b_algo"):
+                h2 = li.find("h2")
+                p = li.find("p")
+                if h2:
+                    results.append({"title": h2.get_text(strip=True), "body": p.get_text(strip=True) if p else ""})
+                if len(results) >= 3: break
+            if results:
+                return results, "Success (Bing Scrape)"
+    except Exception:
+        pass
+
+    return [], "All search methods timed out or were blocked."
 
 def analyze_with_search(text):
     base_query = " ".join(text.split()[:12])
-    results, status_msg = search_web_via_url(f'"{base_query}" fact check')
+    results, status_msg = search_web_multi_tier(f'"{base_query}" fact check')
     
     if not results:
         return None, status_msg, ""
@@ -395,7 +418,7 @@ def analyze_with_search(text):
         if any(w in combined for w in fake_words): score -= 1
         if any(w in combined for w in real_words): score += 1
 
-    return score, f"Scraped {len(results)} live web results.", live_context
+    return score, f"Scraped {len(results)} results via {status_msg}.", live_context
 
 # ============================================================
 # UNIVERSAL DYNAMIC LLM SCANNER
@@ -599,7 +622,7 @@ if analyze_clicked:
             else: 
                 text_fake = False
 
-            # ---------- PHASE 2: DIRECT WEB URL SEARCH ----------
+            # ---------- PHASE 2: MULTI-TIER WEB SEARCH ----------
             st.subheader("🔎 Phase 2: Live Web Search (No API)")
             search_score, search_detail, live_context = analyze_with_search(translated_text)
             
@@ -644,7 +667,6 @@ if analyze_clicked:
 
             media_weight = 2 if media_analyzed else 0
             # FIX: If there is text, we ALWAYS give it weight now, even if local models fail.
-            # This prevents the total_weight from being 0.
             text_weight = 2 if clean_text else 0
             search_weight = 1 if search_score is not None else 0
             judge_weight = 3 if judge_votes else 0
